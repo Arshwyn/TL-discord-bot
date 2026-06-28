@@ -1,0 +1,15 @@
+# .gitignore
+
+# Secrets & Configuration
+.env
+
+# Local Database Files
+data/
+*.db
+*.sqlite3
+
+# Python / Environment Artifacts
+.venv/
+__pycache__/
+*.pyc
+.uv/
