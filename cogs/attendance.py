@@ -1,8 +1,23 @@
 import discord
 from discord.ext import commands
+from sqlalchemy.orm import joinedload # NEW: Enables pulling joined data quickly
 
 from database.db_setup import get_db
 from database.models import EventAttendance, GuildEvent
+
+# Maps weapon text to visual icons for the embed space saving
+WEAPON_EMOJIS = {
+    "Greatsword": "🗡️",
+    "Sword and Shield": "🛡️",
+    "Dagger": "🔪",
+    "Crossbow": "🏹",
+    "Longbow": "🏹",
+    "Staff": "🪄",
+    "Wand and Tome": "📘",
+    "Spear": "🔱",
+    "Orb": "🔮",
+    "Gauntlets": "🥊"
+}
 
 class AttendanceView(discord.ui.View):
     def __init__(self, event_id: int):
@@ -13,61 +28,52 @@ class AttendanceView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         with next(get_db()) as db:
-            # Security Check: Ensure the event is active
             event = db.query(GuildEvent).filter_by(id=self.event_id).first()
             if not event or event.is_completed:
                 await interaction.followup.send("❌ **This event has already concluded.**", ephemeral=True)
                 return
 
-            # Save or update attendance record
-            attendance = db.query(EventAttendance).filter_by(
-                event_id=self.event_id, 
-                discord_id=interaction.user.id
-            ).first()
-
+            attendance = db.query(EventAttendance).filter_by(event_id=self.event_id, discord_id=interaction.user.id).first()
             if attendance:
                 attendance.status = status
             else:
-                attendance = EventAttendance(
-                    event_id=self.event_id,
-                    discord_id=interaction.user.id,
-                    status=status
-                )
+                attendance = EventAttendance(event_id=self.event_id, discord_id=interaction.user.id, status=status)
                 db.add(attendance)
-            
             db.commit()
 
-            # 📋 ROSTER GENERATION: Query all signups for this event
-            all_signups = db.query(EventAttendance).filter_by(event_id=self.event_id).all()
+            # NEW: Pull signups AND eagerly load the user profile data in a single rapid query
+            all_signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=self.event_id).all()
 
-        # Group players by their RSVP choice
         attending_players = []
         absent_players = []
         tentative_players = []
 
         for signup in all_signups:
-            # Format as a clickable mention tag (e.g., @Derrick)
             mention_tag = f"<@{signup.discord_id}>"
-            if signup.status == "attending":
-                attending_players.append(mention_tag)
-            elif signup.status == "absent":
-                absent_players.append(mention_tag)
-            elif signup.status == "tentative":
-                tentative_players.append(mention_tag)
+            
+            # If they have a profile, append the weapon icons
+            if signup.user:
+                w1 = WEAPON_EMOJIS.get(signup.user.primary_weapon, "")
+                w2 = WEAPON_EMOJIS.get(signup.user.secondary_weapon, "")
+                entry = f"{mention_tag} {w1}{w2}"
+            else:
+                entry = f"{mention_tag}"
 
-        # Create clean, scannable string lines (or display "None" if empty)
-        attending_list = "\n".join(attending_players) if attending_players else "*None*"
-        absent_list = "\n".join(absent_players) if absent_players else "*None*"
-        tentative_list = "\n".join(tentative_players) if tentative_players else "*None*"
+            if signup.status == "attending": attending_players.append(entry)
+            elif signup.status == "absent": absent_players.append(entry)
+            elif signup.status == "tentative": tentative_players.append(entry)
 
-        # Rebuild and update the embed fields dynamically
+        # Discord Field Safeguard: Fields fail if > 1024 characters.
+        def safe_join(player_list):
+            res = "\n".join(player_list) if player_list else "*None*"
+            return res[:1000] + "\n...*(Too many to display)*" if len(res) > 1024 else res
+
         embed = interaction.message.embeds[0]
-        embed.set_field_at(1, name=f"✅ Attending ({len(attending_players)})", value=attending_list, inline=True)
-        embed.set_field_at(2, name=f"❌ Not Attending ({len(absent_players)})", value=absent_list, inline=True)
-        embed.set_field_at(3, name=f"⏳ Tentative ({len(tentative_players)})", value=tentative_list, inline=True)
+        embed.set_field_at(1, name=f"✅ Attending ({len(attending_players)})", value=safe_join(attending_players), inline=True)
+        embed.set_field_at(2, name=f"❌ Not Attending ({len(absent_players)})", value=safe_join(absent_players), inline=True)
+        embed.set_field_at(3, name=f"⏳ Tentative ({len(tentative_players)})", value=safe_join(tentative_players), inline=True)
         
         await interaction.message.edit(embed=embed)
-        
         display_status = "Not Attending" if status == "absent" else status.capitalize()
         await interaction.followup.send(f"Your RSVP has been recorded as **{display_status}**.", ephemeral=True)
 

@@ -8,6 +8,8 @@ import os
 from database.db_setup import get_db
 from database.models import GuildEvent
 from cogs.attendance import AttendanceView
+from sqlalchemy.orm import joinedload
+from database.models import EventAttendance
 
 class SchedulingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -326,6 +328,70 @@ class SchedulingCog(commands.Cog):
                         except discord.NotFound:
                             pass
                     db.commit()
+
+    @app_commands.command(
+        name="view_roster", 
+        description="View a detailed breakdown of player sign-ups and gear for an event"
+    )
+    @app_commands.describe(event_id="The ID of the event roster you want to view")
+    async def view_roster(self, interaction: discord.Interaction, event_id: int):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        with next(get_db()) as db:
+            event = db.query(GuildEvent).filter_by(id=event_id).first()
+            if not event:
+                await interaction.followup.send(f"❌ Event ID `{event_id}` not found.", ephemeral=True)
+                return
+
+            # Eagerly load the user profiles
+            records = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event_id).all()
+
+        attending_list = []
+        absent_list = []
+        tentative_list = []
+
+        for record in records:
+            # If they have a profile, use their IG Name and exact gear
+            if record.user:
+                name_display = record.user.ingame_name
+                details = f" [⭐ {record.user.gear_score} | {record.user.primary_weapon} / {record.user.secondary_weapon}]"
+            else:
+                # Fallback to Discord logic if unregistered
+                member = interaction.guild.get_member(record.discord_id)
+                name_display = member.display_name if member else f"Unregistered User (<@{record.discord_id}>)"
+                details = " *(No Profile)*"
+
+            entry = f"• **{name_display}**{details}"
+
+            if record.status == "attending": attending_list.append(entry)
+            elif record.status == "absent": absent_list.append(entry)
+            elif record.status == "tentative": tentative_list.append(entry)
+
+        unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
+        
+        embed = discord.Embed(
+            title=f"📋 Roster Breakdown: {event.name}",
+            description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`",
+            color=discord.Color.blue()
+        )
+
+        # Truncate lists safely to avoid field limits
+        def safe_join(lst):
+            res = "\n".join(lst) if lst else "*No sign-ups*"
+            return res[:1000] + "\n..." if len(res) > 1024 else res
+
+        embed.add_field(name=f"✅ Attending ({len(attending_list)})", value=safe_join(attending_list), inline=False)
+        embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
+        embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
+
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            await interaction.followup.send("❌ Roster data is too large to render in a single embed.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SchedulingCog(bot))
