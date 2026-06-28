@@ -23,8 +23,12 @@ class GuildEvent(Base):
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     recurrence_days: Mapped[int] = mapped_column(Integer, default=0) 
-    
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    # NEW: Multiple Notification Tracking
+    notify_schedule: Mapped[str] = mapped_column(String(100), default="4320") # e.g. "4320,60,5"
+    notifies_sent: Mapped[str] = mapped_column(String(100), default="")       # Tracks what has fired
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False)        # Marks event as finished
     
     is_posted: Mapped[bool] = mapped_column(Boolean, default=False)
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
