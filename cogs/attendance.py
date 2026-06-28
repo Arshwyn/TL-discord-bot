@@ -57,7 +57,7 @@ class AttendanceView(discord.ui.View):
     async def attending(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "attending")
 
-    @discord.ui.button(label="Not Attending", emoji="❌", style=discord.ButtonStyle.gray, custom_id="btn_absent")
+    @discord.ui.button(label="Not Attending", emoji="❌", style=discord.ButtonStyle.red, custom_id="btn_absent")
     async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "absent")
 
