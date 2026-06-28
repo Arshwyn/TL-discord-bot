@@ -10,16 +10,16 @@ class AttendanceView(discord.ui.View):
         self.event_id = event_id
 
     async def handle_rsvp(self, interaction: discord.Interaction, status: str):
-        # Defer interaction to avoid timeout errors
         await interaction.response.defer(ephemeral=True)
         
         with next(get_db()) as db:
-            # 🛡️ SECURITY CHECK: Ensure the event is active before allowing RSVPs
+            # Security Check: Ensure the event is active
             event = db.query(GuildEvent).filter_by(id=self.event_id).first()
             if not event or event.is_completed:
-                await interaction.followup.send("⛔ **This event has already concluded.**", ephemeral=True)
+                await interaction.followup.send("❌ **This event has already concluded.**", ephemeral=True)
                 return
 
+            # Save or update attendance record
             attendance = db.query(EventAttendance).filter_by(
                 event_id=self.event_id, 
                 discord_id=interaction.user.id
@@ -37,16 +37,34 @@ class AttendanceView(discord.ui.View):
             
             db.commit()
 
-            # Refresh roster counts
-            total_attending = db.query(EventAttendance).filter_by(event_id=self.event_id, status="attending").count()
-            total_absent = db.query(EventAttendance).filter_by(event_id=self.event_id, status="absent").count()
-            total_tentative = db.query(EventAttendance).filter_by(event_id=self.event_id, status="tentative").count()
+            # 📋 ROSTER GENERATION: Query all signups for this event
+            all_signups = db.query(EventAttendance).filter_by(event_id=self.event_id).all()
 
-        # Dynamically update the embed
+        # Group players by their RSVP choice
+        attending_players = []
+        absent_players = []
+        tentative_players = []
+
+        for signup in all_signups:
+            # Format as a clickable mention tag (e.g., @Derrick)
+            mention_tag = f"<@{signup.discord_id}>"
+            if signup.status == "attending":
+                attending_players.append(mention_tag)
+            elif signup.status == "absent":
+                absent_players.append(mention_tag)
+            elif signup.status == "tentative":
+                tentative_players.append(mention_tag)
+
+        # Create clean, scannable string lines (or display "None" if empty)
+        attending_list = "\n".join(attending_players) if attending_players else "*None*"
+        absent_list = "\n".join(absent_players) if absent_players else "*None*"
+        tentative_list = "\n".join(tentative_players) if tentative_players else "*None*"
+
+        # Rebuild and update the embed fields dynamically
         embed = interaction.message.embeds[0]
-        embed.set_field_at(1, name="✅ Attending", value=f"`{total_attending} players`", inline=True)
-        embed.set_field_at(2, name="⛔ Not Attending", value=f"`{total_absent} players`", inline=True)
-        embed.set_field_at(3, name="⏳ Tentative", value=f"`{total_tentative} players`", inline=True)
+        embed.set_field_at(1, name=f"✅ Attending ({len(attending_players)})", value=attending_list, inline=True)
+        embed.set_field_at(2, name=f"❌ Not Attending ({len(absent_players)})", value=absent_list, inline=True)
+        embed.set_field_at(3, name=f"⏳ Tentative ({len(tentative_players)})", value=tentative_list, inline=True)
         
         await interaction.message.edit(embed=embed)
         
@@ -57,7 +75,7 @@ class AttendanceView(discord.ui.View):
     async def attending(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "attending")
 
-    @discord.ui.button(label="Not Attending", emoji="⛔", style=discord.ButtonStyle.red, custom_id="btn_absent")
+    @discord.ui.button(label="Not Attending", emoji="❌", style=discord.ButtonStyle.gray, custom_id="btn_absent")
     async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "absent")
 
