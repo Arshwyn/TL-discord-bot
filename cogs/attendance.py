@@ -17,7 +17,7 @@ class AttendanceView(discord.ui.View):
             # 🛡️ SECURITY CHECK: Ensure the event is active before allowing RSVPs
             event = db.query(GuildEvent).filter_by(id=self.event_id).first()
             if not event or event.is_completed:
-                await interaction.followup.send("❌ **This event has already concluded.**", ephemeral=True)
+                await interaction.followup.send("⛔ **This event has already concluded.**", ephemeral=True)
                 return
 
             attendance = db.query(EventAttendance).filter_by(
@@ -45,7 +45,7 @@ class AttendanceView(discord.ui.View):
         # Dynamically update the embed
         embed = interaction.message.embeds[0]
         embed.set_field_at(1, name="✅ Attending", value=f"`{total_attending} players`", inline=True)
-        embed.set_field_at(2, name="❌ Not Attending", value=f"`{total_absent} players`", inline=True)
+        embed.set_field_at(2, name="⛔ Not Attending", value=f"`{total_absent} players`", inline=True)
         embed.set_field_at(3, name="⏳ Tentative", value=f"`{total_tentative} players`", inline=True)
         
         await interaction.message.edit(embed=embed)
@@ -57,7 +57,7 @@ class AttendanceView(discord.ui.View):
     async def attending(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "attending")
 
-    @discord.ui.button(label="Not Attending", emoji="❌", style=discord.ButtonStyle.red, custom_id="btn_absent")
+    @discord.ui.button(label="Not Attending", emoji="⛔", style=discord.ButtonStyle.red, custom_id="btn_absent")
     async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "absent")
 
