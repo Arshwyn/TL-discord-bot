@@ -1,5 +1,6 @@
 # database/db_setup.py
 import os
+from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from database.models import Base
@@ -20,7 +21,7 @@ def init_db():
     """Create all tables if they do not exist."""
     Base.metadata.create_all(bind=engine)
 
-def get_db() -> Session:
+def get_db() -> Generator[Session, None, None]:
     """Context manager generation for scoping db sessions inside cog executions."""
     db = SessionLocal()
     try:
