@@ -2,13 +2,12 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
+from database.db_setup import init_db  # <-- Import database runner
 
-# Load secrets from .env
 load_dotenv()
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 GUILD_ID = os.getenv('GUILD_ID')
 
-# Intents are required to read member data and message content
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -18,12 +17,17 @@ class TLGuildBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # Load extensions/cogs dynamically
+        # 1. Initialize the SQLite Database Tables
+        print("Initializing persistence layer...")
+        init_db()
+        print("Database sync complete.")
+
+        # 2. Load Cog files
+        os.makedirs('./cogs', exist_ok=True) # Ensure directory exists
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py'):
                 await self.load_extension(f'cogs.{filename[:-3]}')
         
-        # Sync slash commands to your specific server instantly
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
