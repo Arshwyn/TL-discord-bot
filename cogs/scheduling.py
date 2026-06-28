@@ -47,7 +47,7 @@ class SchedulingCog(commands.Cog):
         name: str, 
         date_time: str, 
         tz_input: str = "UTC",
-        notify_schedule: str = "4320, 60, 0", # Default: 3 Days, 1 Hour, Start Time
+        notify_schedule: str = "0", # Default: Start Time
         recurrence: int = 0,
         requires_rsvp: bool = True,
         description: str = None
@@ -135,8 +135,121 @@ class SchedulingCog(commands.Cog):
             report = report[:1996] + "..."
         await interaction.response.send_message(report, ephemeral=True)
 
-    @tasks.loop(seconds=15)
+    @tasks.loop(seconds=15) # ⏱️ Updated to 15 seconds for precision
     async def check_events_loop(self):
+        await self.bot.wait_until_ready()
+        
+        channel_id = os.getenv("SCHEDULE_CHANNEL_ID")
+        role_member_id = os.getenv("ROLE_GUILD_MEMBER")
+        guild_id = os.getenv("GUILD_ID")
+        
+        if not channel_id: return
+        channel = self.bot.get_channel(int(channel_id))
+        if not channel: return
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        with next(get_db()) as db:
+            active_events = db.query(GuildEvent).filter_by(is_completed=False).all()
+
+            for event in active_events:
+                time_delta = event.start_time - now
+                delta_mins = time_delta.total_seconds() / 60.0
+                
+                schedule = [int(x) for x in event.notify_schedule.split(",")] if event.notify_schedule else []
+                sent = [int(x) for x in event.notifies_sent.split(",")] if event.notifies_sent else []
+
+                for target_mins in sorted(schedule, reverse=True):
+                    if target_mins not in sent and delta_mins <= target_mins:
+                        
+                        ping_text = f"<@&{role_member_id}>" if role_member_id else "@here"
+
+                        if not event.is_posted:
+                            unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
+                            embed = discord.Embed(
+                                title=f"⚔️ {event.name}",
+                                description=event.description or ("Sign up using the buttons below." if event.requires_rsvp else "Mark your calendars!"),
+                                color=discord.Color.gold()
+                            )
+                            embed.add_field(name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
+                            
+                            if event.requires_rsvp:
+                                embed.add_field(name="✅ Attending", value="`0 players`", inline=True)
+                                embed.add_field(name="❌ Absent", value="`0 players`", inline=True)
+                                embed.add_field(name="⏳ Tentative", value="`0 players`", inline=True)
+                            
+                            footer_text = f"Event ID: {event.id}"
+                            if event.recurrence_days > 0:
+                                footer_text += f" | 🔁 Recurs every {event.recurrence_days} days"
+                            embed.set_footer(text=footer_text)
+
+                            if event.requires_rsvp:
+                                view = AttendanceView(event_id=event.id)
+                                message = await channel.send(content=ping_text, embed=embed, view=view)
+                            else:
+                                message = await channel.send(content=ping_text, embed=embed)
+                            
+                            event.is_posted = True
+                            event.message_id = message.id
+
+                            if event.recurrence_days > 0:
+                                next_time = event.start_time + timedelta(days=event.recurrence_days)
+                                next_event = GuildEvent(
+                                    name=event.name,
+                                    description=event.description,
+                                    start_time=next_time,
+                                    recurrence_days=event.recurrence_days,
+                                    requires_rsvp=event.requires_rsvp,
+                                    notify_schedule=event.notify_schedule,
+                                    notifies_sent="",
+                                    is_posted=False,
+                                    is_completed=False
+                                )
+                                db.add(next_event)
+                        else:
+                            poll_link = f"https://discord.com/channels/{guild_id}/{channel_id}/{event.message_id}" if event.message_id and guild_id else ""
+                            link_text = f"\n👉 [Jump to Sign-up/Details]({poll_link})" if poll_link else ""
+                            
+                            if target_mins == 0:
+                                reminder = f"{ping_text} ⚔️ **{event.name} is starting NOW!**{link_text}"
+                            else:
+                                reminder = f"{ping_text} ⏰ **Reminder:** {event.name} starts in **{target_mins} minutes**!{link_text}"
+                            
+                            await channel.send(reminder)
+                        
+                        sent.append(target_mins)
+                        event.notifies_sent = ",".join(map(str, sent))
+                        db.commit()
+
+                # 3. 🛑 GARBAGE COLLECTION: Disable old messages automatically
+                # Triggers when ALL notifications have fired and the start time has fully passed (delta_mins < 0)
+                if set(schedule).issubset(set(sent)) and delta_mins < 0:
+                    event.is_completed = True
+                    
+                    # Only attempt to edit messages that had buttons
+                    if event.requires_rsvp and event.message_id:
+                        try:
+                            # Fetch the original embed
+                            msg = await channel.fetch_message(event.message_id)
+                            view = AttendanceView(event_id=event.id)
+                            
+                            # Disable every button in the view
+                            for child in view.children:
+                                child.disabled = True
+                                
+                            # Grey out the embed and add a concluded tag
+                            embed = msg.embeds[0]
+                            embed.color = discord.Color.dark_grey()
+                            embed.set_footer(text=f"Event ID: {event.id} | 🛑 Event Concluded")
+                            
+                            # Push the locked update to Discord
+                            await msg.edit(embed=embed, view=view)
+                        except discord.NotFound:
+                            # Ignored safely if an admin manually deleted the message before the bot got to it
+                            pass
+
+                    db.commit()
+
         await self.bot.wait_until_ready()
         
         channel_id = os.getenv("SCHEDULE_CHANNEL_ID")
