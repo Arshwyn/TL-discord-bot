@@ -1,6 +1,68 @@
-# cogs/attendance.py
 import discord
 from discord.ext import commands
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+
+from database.db_setup import get_db
+from database.models import EventAttendance, GuildEvent
+
+class AttendanceView(discord.ui.View):
+    def __init__(self, event_id: int):
+        # timeout=None makes the buttons persistent across bot restarts
+        super().__init__(timeout=None)
+        self.event_id = event_id
+
+    async def handle_rsvp(self, interaction: discord.Interaction, status: str):
+        # Defer interaction to avoid "Interaction failed" errors while talking to DB
+        await interaction.response.defer(ephemeral=True)
+        
+        with next(get_db()) as db:
+            # Check if this user has already RSVP'd for this specific event
+            attendance = db.query(EventAttendance).filter_by(
+                event_id=self.event_id, 
+                discord_id=interaction.user.id
+            ).first()
+
+            if attendance:
+                attendance.status = status
+            else:
+                attendance = EventAttendance(
+                    event_id=self.event_id,
+                    discord_id=interaction.user.id,
+                    status=status
+                )
+                db.add(attendance)
+            
+            db.commit()
+
+            # Query the updated roster counts to refresh the embed presentation
+            total_attending = db.query(EventAttendance).filter_by(event_id=self.event_id, status="attending").count()
+            total_absent = db.query(EventAttendance).filter_by(event_id=self.event_id, status="absent").count()
+            total_tentative = db.query(EventAttendance).filter_by(event_id=self.event_id, status="tentative").count()
+
+        # Update the original message embed dynamically with the new counts
+        embed = interaction.message.embeds[0]
+        
+        # Re-map fields safely (Index 1 is Attending, 2 is Absent, 3 is Tentative based on our scheduling embed)
+        embed.set_field_at(1, name="✅ Attending", value=f"`{total_attending} players`", inline=True)
+        embed.set_field_at(2, name="❌ Absent", value=f"`{total_absent} players`", inline=True)
+        embed.set_field_at(3, name="⏳ Tentative", value=f"`{total_tentative} players`", inline=True)
+        
+        await interaction.message.edit(embed=embed)
+        await interaction.followup.send(f"Your RSVP has been recorded as **{status.capitalize()}**.", ephemeral=True)
+
+    @discord.ui.button(label="Attending", style=discord.ButtonStyle.green, custom_id="btn_attend")
+    async def attending(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rsvp(interaction, "attending")
+
+    @discord.ui.button(label="Absent", style=discord.ButtonStyle.red, custom_id="btn_absent")
+    async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rsvp(interaction, "absent")
+
+    @discord.ui.button(label="Tentative", style=discord.ButtonStyle.blurple, custom_id="btn_tentative")
+    async def tentative(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rsvp(interaction, "tentative")
+
 
 class AttendanceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -8,7 +70,7 @@ class AttendanceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        print("Attendance Cog loaded successfully.")
+        print("Attendance UI system online.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AttendanceCog(bot))
