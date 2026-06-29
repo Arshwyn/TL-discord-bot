@@ -6,7 +6,7 @@ import zoneinfo
 import os
 
 from database.db_setup import get_db
-from database.models import GuildEvent, EventAttendance, AttendanceRecord, UserProfile
+from database.models import GuildEvent, EventAttendance, AttendanceRecord, UserProfile, BotConfig
 from sqlalchemy.orm import joinedload
 from cogs.attendance import AttendanceView
 
@@ -25,6 +25,26 @@ class SchedulingCog(commands.Cog):
         app_commands.Choice(name="Pacific Time (PST/PDT)", value="US/Pacific"),
         app_commands.Choice(name="Coordinated Universal Time (UTC)", value="UTC"),
     ]
+
+    # 🟢 NEW: Supports up to 3 roles for event pings
+    @app_commands.command(name="set_ping_roles", description="Set up to 3 default roles to ping for event reminders")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(role1="Primary role to ping", role2="Second role to ping (Optional)", role3="Third role to ping (Optional)")
+    async def set_ping_roles(self, interaction: discord.Interaction, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None):
+        # Bundle the provided roles, filtering out empty ones
+        roles = [r for r in (role1, role2, role3) if r is not None]
+        role_ids_str = ",".join(str(r.id) for r in roles)
+        mentions_str = " ".join(r.mention for r in roles)
+
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="ping_role_ids").first()
+            if cfg:
+                cfg.setting_value = role_ids_str
+            else:
+                db.add(BotConfig(setting_key="ping_role_ids", setting_value=role_ids_str))
+            db.commit()
+            
+        await interaction.response.send_message(f"✅ Event reminders will now automatically ping: {mentions_str}", ephemeral=True)
 
     @app_commands.command(name="create_event", description="Schedule a guild event")
     @app_commands.default_permissions(manage_guild=True)
@@ -274,11 +294,20 @@ class SchedulingCog(commands.Cog):
     @tasks.loop(seconds=15)
     async def check_events_loop(self):
         await self.bot.wait_until_ready()
-        role_member_id = os.getenv("ROLE_GUILD_MEMBER")
-        guild_id = os.getenv("GUILD_ID")
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         with next(get_db()) as db:
+            # 🟢 NEW: Pull all roles and dynamically compile them into the ping text!
+            cfg = db.query(BotConfig).filter_by(setting_key="ping_role_ids").first()
+            if not cfg:
+                # Fallback check for the old singular key just in case
+                cfg = db.query(BotConfig).filter_by(setting_key="ping_role_id").first()
+                
+            ping_text = "@here" # Failsafe
+            if cfg and cfg.setting_value:
+                role_ids = cfg.setting_value.split(",")
+                ping_text = " ".join([f"<@&{rid}>" for rid in role_ids])
+            
             active_events = db.query(GuildEvent).filter_by(is_completed=False).all()
 
             for event in active_events:
@@ -294,8 +323,7 @@ class SchedulingCog(commands.Cog):
 
                 for target_mins in sorted(schedule, reverse=True):
                     if target_mins not in sent and delta_mins <= target_mins:
-                        ping_text = f"<@&{role_member_id}>" if role_member_id else "@here"
-
+                        
                         if not event.is_posted:
                             unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
                             embed = discord.Embed(title=f"⚔️ {event.name}", color=discord.Color.gold())
@@ -321,12 +349,12 @@ class SchedulingCog(commands.Cog):
                                     name=event.name, description=event.description, start_time=next_time,
                                     recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
                                     notify_schedule=event.notify_schedule, channel_id=event.channel_id,
-                                    voice_channel_id=event.voice_channel_id, # Carry over the specific VC target
+                                    voice_channel_id=event.voice_channel_id, 
                                     notifies_sent="", is_posted=False, is_completed=False
                                 )
                                 db.add(next_event)
                         else:
-                            poll_link = f"https://discord.com/channels/{guild_id}/{event.channel_id}/{event.message_id}" if event.message_id and guild_id else ""
+                            poll_link = f"https://discord.com/channels/{channel.guild.id}/{event.channel_id}/{event.message_id}" if event.message_id else ""
                             link_text = f"\n👉 [Jump to Details]({poll_link})" if poll_link else ""
                             if target_mins == 0:
                                 reminder = f"{ping_text} ⚔️ **{event.name} is starting NOW!**{link_text}"
@@ -357,14 +385,12 @@ class SchedulingCog(commands.Cog):
 
                     active_voice_member_ids = set()
                     
-                    # 🎯 NEW: Restricted Channel Audit Logic
                     if event.voice_channel_id:
                         vc = channel.guild.get_channel(event.voice_channel_id)
                         if vc and isinstance(vc, discord.VoiceChannel):
                             for member in vc.members:
                                 active_voice_member_ids.add(member.id)
                     else:
-                        # Fallback: Scan all voice channels
                         for vc in channel.guild.voice_channels:
                             for member in vc.members:
                                 active_voice_member_ids.add(member.id)

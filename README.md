@@ -15,7 +15,6 @@ A fully-featured, database-backed Discord bot built for managing *Throne and Lib
 
 * [Docker](https://docs.docker.com/get-docker/) & Docker Compose
 * A Discord Bot Token (Grab one from the [Discord Developer Portal](https://discord.com/developers/applications))
-* Server Role IDs (Member role, Officer role)
 
 ---
 
@@ -23,21 +22,17 @@ A fully-featured, database-backed Discord bot built for managing *Throne and Lib
 
 **1. Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/TL-discord-bot.git
+git clone [https://github.com/yourusername/TL-discord-bot.git](https://github.com/yourusername/TL-discord-bot.git)
 cd TL-discord-bot
 ```
 
 **2. Configure Environment Variables (.env):**
-Copy the example environment file and fill in your details:
+Because this bot is built for plug-and-play deployment, you only need to provide your bot's secret token.
 ```bash
 cp .env.example .env
 ```
-Open the `.env` file and define the following variables:
-* `DISCORD_BOT_TOKEN` - Your bot's secret token.
-* `GUILD_ID` - The ID of your Discord Server.
-* `SCHEDULE_CHANNEL_ID` - Where polls will post (Optional based on overrides).
-* `ROLE_GUILD_MEMBER` - The role ID to ping for event reminders.
-* `ROLE_OFFICER` - The role ID for admin-level bypasses.
+Open the `.env` file and add your token:
+* `DISCORD_BOT_TOKEN=your_discord_bot_token_here`
 
 **3. Deploy with Docker:**
 The bot utilizes SQLite for easy, portable data storage. The `docker-compose.yml` automatically mounts a local `./data` folder to persist your database across container reboots.
@@ -45,11 +40,20 @@ The bot utilizes SQLite for easy, portable data storage. The `docker-compose.yml
 docker-compose up -d --build
 ```
 
+**4. Initial Discord Setup:**
+Once the bot joins your server, its slash commands will sync globally. An Admin must run the following command inside your server so the bot knows who to ping for events:
+* `/set_ping_roles @Role1 [@Role2] [@Role3]`
+
 ---
 
 ## 📜 Command Reference
 
 *Note: Commands marked with **Admin Only** require the user to have the `Manage Server` permission in Discord.*
+
+### ⚙️ Bot Configuration
+| Command | Permission | Description |
+| :--- | :--- | :--- |
+| `/set_ping_roles` | Admin Only | Set up to 3 roles (e.g., @Member, @Raider) that the bot will automatically ping when event reminders trigger. |
 
 ### 🛡️ Profile & Statics
 | Command | Permission | Description |
