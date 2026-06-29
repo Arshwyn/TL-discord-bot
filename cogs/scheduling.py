@@ -208,7 +208,7 @@ class SchedulingCog(commands.Cog):
         await interaction.response.send_message(report, ephemeral=True)
 
     @app_commands.command(name="view_roster", description="View a deep breakdown of sign-ups and gear targets")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(event_id="The ID of the event roster you want to view")
     async def view_roster(self, interaction: discord.Interaction, event_id: int):
         await interaction.response.defer(ephemeral=True)
@@ -220,36 +220,46 @@ class SchedulingCog(commands.Cog):
                 return
             records = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event_id).all()
 
-        attending_list, absent_list, tentative_list = [], [], []
+        attending_dict = {}
+        absent_list, tentative_list = [], []
+        total_attending = 0
 
         for record in records:
             if record.user:
                 name_display = record.user.ingame_name
                 details = f" [⭐ {record.user.gear_score} | {record.user.primary_weapon} / {record.user.secondary_weapon}]"
+                s_group = record.user.static_group or "Unassigned"
             else:
                 member = interaction.guild.get_member(record.discord_id)
                 name_display = member.display_name if member else f"Unregistered User (<@{record.discord_id}>)"
                 details = " *(No Profile)*"
+                s_group = "Unassigned"
 
             entry = f"• **{name_display}**{details}"
 
-            if record.status == "attending": attending_list.append(entry)
+            if record.status == "attending":
+                if s_group not in attending_dict: attending_dict[s_group] = []
+                attending_dict[s_group].append(entry)
+                total_attending += 1
             elif record.status == "absent": absent_list.append(entry)
             elif record.status == "tentative": tentative_list.append(entry)
 
+        # Sort and Format Attending
+        attending_lines = []
+        sorted_groups = sorted(attending_dict.keys(), key=lambda x: (x == "Unassigned", x))
+        for group in sorted_groups:
+            attending_lines.append(f"**🛡️ {group}**")
+            attending_lines.extend(attending_dict[group])
+            attending_lines.append("")
+
         unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
-        
-        embed = discord.Embed(
-            title=f"📋 Roster Breakdown: {event.name}",
-            description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`",
-            color=discord.Color.blue()
-        )
+        embed = discord.Embed(title=f"📋 Roster Breakdown: {event.name}", description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`", color=discord.Color.blue())
 
         def safe_join(lst):
-            res = "\n".join(lst) if lst else "*No sign-ups*"
+            res = "\n".join(lst).strip() if lst else "*No sign-ups*"
             return res[:1000] + "\n..." if len(res) > 1024 else res
 
-        embed.add_field(name=f"✅ Attending ({len(attending_list)})", value=safe_join(attending_list), inline=False)
+        embed.add_field(name=f"✅ Attending ({total_attending})", value=safe_join(attending_lines), inline=False)
         embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
         embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
 
