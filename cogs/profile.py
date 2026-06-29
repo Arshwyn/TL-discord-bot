@@ -15,7 +15,7 @@ class ProfileCog(commands.Cog):
         self.bot = bot
 
     profile_group = app_commands.Group(name="profile", description="Manage your character profile")
-    static_group = app_commands.Group(name="static", description="Manage guild static parties") # NEW GROUP
+    static_group = app_commands.Group(name="static", description="Manage guild static parties")
 
     WEAPON_CHOICES = [
         app_commands.Choice(name="Greatsword", value="Greatsword"),
@@ -104,7 +104,7 @@ class ProfileCog(commands.Cog):
         await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
 
     # ==========================================
-    # STATIC MANAGEMENT COMMANDS (OFFICER ONLY)
+    # STATIC MANAGEMENT COMMANDS
     # ==========================================
     @static_group.command(name="assign", description="Assign a user to a specific Static Party")
     @app_commands.default_permissions(manage_guild=True)
@@ -132,6 +132,61 @@ class ProfileCog(commands.Cog):
                 await interaction.response.send_message(f"✅ Removed {member.mention} from their static group.", ephemeral=True)
             else:
                 await interaction.response.send_message(f"⚠️ {member.mention} is not currently in a static.", ephemeral=True)
+
+    @static_group.command(name="list", description="View all static parties, their members, and average gear scores")
+    @app_commands.describe(group_name="Optional: View a specific static party only")
+    async def static_list(self, interaction: discord.Interaction, group_name: str = None):
+        await interaction.response.defer(ephemeral=False) # Not ephemeral, so the guild can see their statics!
+
+        with next(get_db()) as db:
+            # Query all profiles that are assigned to a static (or a specific static if requested)
+            if group_name:
+                profiles = db.query(UserProfile).filter(UserProfile.static_group == group_name).all()
+            else:
+                profiles = db.query(UserProfile).filter(UserProfile.static_group != None).all()
+
+        if not profiles:
+            msg = f"📭 No members found in static '{group_name}'." if group_name else "📭 No static parties have been formed yet."
+            await interaction.followup.send(msg)
+            return
+
+        # Sort the results into buckets based on static name
+        statics_dict = {}
+        for p in profiles:
+            if p.static_group not in statics_dict:
+                statics_dict[p.static_group] = []
+            statics_dict[p.static_group].append(p)
+
+        embeds = []
+        # Build one Discord Embed card per Static Party
+        for static_name, members in statics_dict.items():
+            # Sort members within the static by highest Gear Score
+            members.sort(key=lambda x: x.gear_score, reverse=True)
+            
+            # Calculate the group's average GS
+            avg_gs = sum(m.gear_score for m in members) // len(members)
+            
+            lines = []
+            for m in members:
+                w1 = WEAPON_EMOJIS.get(m.primary_weapon, "")
+                w2 = WEAPON_EMOJIS.get(m.secondary_weapon, "")
+                lines.append(f"• <@{m.discord_id}> (`{m.ingame_name}`) [⭐ **{m.gear_score}** | {w1}{w2}]")
+                
+            desc = "\n".join(lines)
+            if len(desc) > 4096:
+                desc = desc[:4090] + "..."
+
+            embed = discord.Embed(
+                title=f"🛡️ Static: {static_name}",
+                description=desc,
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text=f"Total Members: {len(members)} | Average Gear Score: {avg_gs}")
+            embeds.append(embed)
+
+        # Discord allows up to 10 embeds per message. Chunk if they have a ton of statics.
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10])
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ProfileCog(bot))
