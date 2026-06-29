@@ -8,7 +8,6 @@ class Base(DeclarativeBase):
 
 class UserProfile(Base):
     __tablename__ = "user_profiles"
-    # Composite Primary Key: Discord ID + Custom Build Name
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     build_name: Mapped[str] = mapped_column(String(50), primary_key=True) 
     
@@ -21,7 +20,15 @@ class UserProfile(Base):
     gear_screenshot_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     
     loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
-    attendance = relationship("EventAttendance", back_populates="user", cascade="all, delete-orphan")
+    
+    # 🛡️ FIXED: Added primaryjoin mapping on the parent side here
+    attendance = relationship(
+        "EventAttendance", 
+        primaryjoin="UserProfile.discord_id==EventAttendance.discord_id",
+        foreign_keys="[EventAttendance.discord_id]",
+        back_populates="user", 
+        cascade="all, delete-orphan"
+    )
 
 class GuildEvent(Base):
     __tablename__ = "guild_events"
@@ -51,7 +58,8 @@ class EventAttendance(Base):
     selected_role: Mapped[str | None] = mapped_column(String(50), nullable=True) 
     
     event = relationship("GuildEvent", back_populates="signups")
-    # Setup relationship mapping
+    
+    # 🛡️ FIXED: Synchronized foreign_keys descriptor to match parent declaration
     user = relationship(
         "UserProfile", 
         primaryjoin="EventAttendance.discord_id==UserProfile.discord_id",

@@ -168,6 +168,29 @@ class ProfileCog(commands.Cog):
             ephemeral=True
         )
 
+    @profile_group.command(name="delete", description="Permanently delete one of your character build profiles")
+    @app_commands.autocomplete(build_name=update_build_autocomplete) # Reuses your personal build dropdown list
+    @app_commands.describe(build_name="Select the specific build profile you want to permanently delete")
+    async def delete_build(self, interaction: discord.Interaction, build_name: str):
+        with next(get_db()) as db:
+            profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=build_name).first()
+            
+            if not profile:
+                await interaction.response.send_message(
+                    f"❌ Could not find a build named **{build_name}**. Operation canceled.", 
+                    ephemeral=True
+                )
+                return
+
+            # Remove the row from the database
+            db.delete(profile)
+            db.commit()
+
+        await interaction.response.send_message(
+            f"🗑️ **Build Profile Deleted!** The build **'{build_name}'** has been permanently removed from your account.", 
+            ephemeral=True
+        )
+
     @profile_group.command(name="view", description="View a member's character profile(s)")
     @app_commands.autocomplete(build_name=view_build_autocomplete) # 🟢 Linked Autocomplete
     @app_commands.describe(member="The user to check", build_name="Optional: Select a specific build. Leave blank to see all.")
@@ -203,7 +226,7 @@ class ProfileCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"👤 Profile: {profile.ingame_name} | {profile.build_name}", 
-            description=f"Type: **{profile.build_type} Optimization**{static_tag}", 
+            description=f"Type: **{profile.build_type}**{static_tag}", 
             color=discord.Color.purple() if profile.build_type == "PvE" else discord.Color.red()
         )
         embed.add_field(name="Discord Account", value=target.mention, inline=False)
