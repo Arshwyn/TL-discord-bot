@@ -7,6 +7,83 @@ from datetime import datetime, timezone, timedelta
 from database.db_setup import get_db
 from database.models import LootItem, LootRoll, UserProfile, BotConfig
 
+# 🟢 NEW: Private Officer Management Menu
+class OfficerManageView(discord.ui.View):
+    def __init__(self, item_id: int, original_message: discord.Message, parent_view: discord.ui.View):
+        super().__init__(timeout=300) 
+        self.item_id = item_id
+        self.original_message = original_message
+        self.parent_view = parent_view
+        self.selected_user = None
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="1. Select a member to modify...", row=0)
+    async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        self.selected_user = select.values[0]
+        await interaction.response.send_message(f"✅ Selected {self.selected_user.mention}. Now click an action button below.", ephemeral=True)
+
+    async def force_roll(self, interaction: discord.Interaction, roll_type: str | None):
+        if not self.selected_user:
+            await interaction.response.send_message("⚠️ Please select a user first from the dropdown menu above.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        with next(get_db()) as db:
+            item = db.query(LootItem).filter_by(id=self.item_id).first()
+            if not item or item.is_closed:
+                await interaction.followup.send("❌ This loot roll is closed.", ephemeral=True)
+                return
+            
+            existing_roll = db.query(LootRoll).filter_by(loot_item_id=item.id, discord_id=self.selected_user.id).first()
+            if roll_type is None:
+                if existing_roll:
+                    db.delete(existing_roll)
+            else:
+                if existing_roll:
+                    existing_roll.roll_type = roll_type
+                else:
+                    db.add(LootRoll(loot_item_id=item.id, discord_id=self.selected_user.id, roll_type=roll_type))
+            db.commit()
+            
+            all_rolls = db.query(LootRoll).filter_by(loot_item_id=item.id).all()
+        
+        # Re-build the visual dictionaries
+        rolls_dict = {"need": [], "alt_want": [], "greed": []}
+        for r in all_rolls:
+            if r.roll_type in rolls_dict:
+                rolls_dict[r.roll_type].append(f"<@{r.discord_id}>")
+
+        def safe_join(lst):
+            res = "\n".join(lst) if lst else "*None*"
+            return res[:1000] + "\n...*(Too many)*" if len(res) > 1024 else res
+
+        # Overwrite the original card with the new forced data
+        embed = self.original_message.embeds[0]
+        embed.set_field_at(0, name=f"🟢 Need ({len(rolls_dict['need'])})", value=safe_join(rolls_dict['need']), inline=True)
+        embed.set_field_at(1, name=f"🔵 Alt / Want ({len(rolls_dict['alt_want'])})", value=safe_join(rolls_dict['alt_want']), inline=True)
+        embed.set_field_at(2, name=f"🟡 Greed ({len(rolls_dict['greed'])})", value=safe_join(rolls_dict['greed']), inline=True)
+
+        await self.original_message.edit(embed=embed, view=self.parent_view)
+        
+        action_text = "removed from the roll" if roll_type is None else f"forced to roll **{roll_type.capitalize()}**"
+        await interaction.followup.send(f"✅ **Success!** {self.selected_user.mention} was {action_text}.", ephemeral=True)
+
+    @discord.ui.button(label="Force Need", emoji="🟢", style=discord.ButtonStyle.success, row=1)
+    async def f_need(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.force_roll(interaction, "need")
+    
+    @discord.ui.button(label="Force Alt/Want", emoji="🔵", style=discord.ButtonStyle.primary, row=1)
+    async def f_alt(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.force_roll(interaction, "alt_want")
+
+    @discord.ui.button(label="Force Greed", emoji="🟡", style=discord.ButtonStyle.secondary, row=1)
+    async def f_greed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.force_roll(interaction, "greed")
+
+    @discord.ui.button(label="Remove Player", emoji="❌", style=discord.ButtonStyle.danger, row=1)
+    async def f_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.force_roll(interaction, None)
+
+
 class PersistentLootView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -73,6 +150,26 @@ class PersistentLootView(discord.ui.View):
     @discord.ui.button(label="Clear Roll", emoji="❌", style=discord.ButtonStyle.danger, custom_id="pl_clear", row=0)
     async def btn_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_roll(interaction, None)
+
+    # 🟢 NEW: Admin Management Button
+    @discord.ui.button(label="Manage Roll", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="pl_manage", row=1)
+    async def btn_manage(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("❌ **Permission Denied:** Only guild officers can manage rolls manually.", ephemeral=True)
+            return
+        
+        with next(get_db()) as db:
+            item = db.query(LootItem).filter_by(message_id=interaction.message.id).first()
+            if not item:
+                await interaction.response.send_message("❌ This loot item could not be found in the database.", ephemeral=True)
+                return
+            item_id = item.id
+            
+        view = OfficerManageView(item_id, interaction.message, self)
+        await interaction.response.send_message(
+            "🛠️ **Officer Roll Management**\nSelect a user below, then click a button to instantly assign or remove their roll.", 
+            view=view, ephemeral=True
+        )
 
     # 🎲 THE NEW AUTO-ROLL & REROLL ENGINE
     @discord.ui.button(label="Auto Roll Winner", emoji="🎲", style=discord.ButtonStyle.danger, custom_id="pl_auto_roll", row=1)
