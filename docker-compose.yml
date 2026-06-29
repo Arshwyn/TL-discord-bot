@@ -5,8 +5,9 @@ services:
     build: .
     container_name: tl_discord_bot
     restart: unless-stopped
-    env_file:
-      - .env
+    # 🟢 NEW: Pulls the variable directly from Portainer's UI instead of a physical file
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
     volumes:
       # Persist SQLite data on your home server
       - ./data:/app/data
