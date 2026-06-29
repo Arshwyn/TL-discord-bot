@@ -385,5 +385,73 @@ class SchedulingCog(commands.Cog):
                             db.add(record)
                     db.commit()
 
+    @app_commands.command(name="attendance_leaderboard", description="View the 30-day guild attendance leaderboard")
+    @app_commands.default_permissions(manage_guild=True)
+    async def attendance_leaderboard(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = now - timedelta(days=30)
+        
+        with next(get_db()) as db:
+            # Query all attendance records from the last 30 days
+            records = db.query(AttendanceRecord).filter(AttendanceRecord.event_date >= cutoff).all()
+            
+        if not records:
+            await interaction.followup.send("📭 No attendance records found in the last 30 days.")
+            return
+            
+        # Group stats by user
+        stats = {}
+        for r in records:
+            if r.discord_id not in stats:
+                # NEW: Added an 'unregistered' tracker bucket
+                stats[r.discord_id] = {"name": r.ingame_name, "present": 0, "ghosted": 0, "unregistered": 0, "total": 0}
+            
+            stats[r.discord_id]["total"] += 1
+            
+            # STRICT MATH: Only formal "Present" grants a point. 
+            # Ghosted and Unregistered add to the total divisor, mathematically tanking their percentage!
+            if r.actual_presence == "Present":
+                stats[r.discord_id]["present"] += 1
+            elif r.actual_presence == "Ghosted":
+                stats[r.discord_id]["ghosted"] += 1
+            elif r.actual_presence == "Unregistered":
+                stats[r.discord_id]["unregistered"] += 1
+                
+        # Calculate percentages and sort
+        leaderboard = []
+        for uid, data in stats.items():
+            pct = (data["present"] / data["total"]) * 100 if data["total"] > 0 else 0
+            leaderboard.append({
+                "uid": uid,
+                "name": data["name"],
+                "present": data["present"],
+                "ghosted": data["ghosted"],
+                "unregistered": data["unregistered"],
+                "total": data["total"],
+                "pct": pct
+            })
+            
+        # Sort by best percentage, then by highest total attendance as a tie breaker
+        leaderboard.sort(key=lambda x: (x["pct"], x["present"]), reverse=True)
+        
+        lines = []
+        for idx, user in enumerate(leaderboard[:25], 1): # Top 25
+            # NEW: Layout includes the Unregistered warning tag
+            lines.append(
+                f"**{idx}.** <@{user['uid']}> (`{user['name']}`) — **{user['pct']:.1f}%** ({user['present']}/{user['total']}) "
+                f"| 👻 {user['ghosted']} Ghosted | ⚠️ {user['unregistered']} Unregistered"
+            )
+            
+        embed = discord.Embed(
+            title="🏆 30-Day Attendance Leaderboard",
+            description="\n".join(lines) if lines else "*No data*",
+            color=discord.Color.brand_green()
+        )
+        embed.set_footer(text="Data compiled from automated voice channel audits. Unregistered appearances penalize score.")
+        
+        await interaction.followup.send(embed=embed)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SchedulingCog(bot))

@@ -14,6 +14,10 @@ class UserProfile(Base):
     secondary_weapon: Mapped[str | None] = mapped_column(String(50), nullable=True)   
     gear_score: Mapped[int] = mapped_column(Integer, default=0)
     static_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    
+    # Tracking loot wins for dynamic roll weighting
+    loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
+    
     attendance = relationship("EventAttendance", back_populates="user", cascade="all, delete-orphan")
 
 class GuildEvent(Base):
@@ -25,8 +29,6 @@ class GuildEvent(Base):
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     recurrence_days: Mapped[int] = mapped_column(Integer, default=0) 
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)
-    
-    # NEW: Tracks which channel this specific event belongs to
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
     notify_schedule: Mapped[str] = mapped_column(String(100), default="4320")
@@ -57,7 +59,7 @@ class AttendanceRecord(Base):
     discord_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     ingame_name: Mapped[str] = mapped_column(String(50), nullable=False)
     signup_status: Mapped[str] = mapped_column(String(20), nullable=False) 
-    actual_presence: Mapped[str] = mapped_column(String(20), nullable=False)
+    actual_presence: Mapped[str] = mapped_column(String(20), nullable=False) 
 
 class LootItem(Base):
     __tablename__ = "loot_items"
@@ -68,18 +70,24 @@ class LootItem(Base):
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
-    
-    # NEW: Timestamp so the bot knows how old the post is
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False) 
     
+    # NEW: Store the winner so we can refund them if an admin rerolls
+    winner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    
     rolls = relationship("LootRoll", back_populates="item", cascade="all, delete-orphan")
-
 class LootRoll(Base):
     __tablename__ = "loot_rolls"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     loot_item_id: Mapped[int] = mapped_column(ForeignKey("loot_items.id", ondelete="CASCADE"))
     discord_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    roll_type: Mapped[str] = mapped_column(String(20), nullable=False) # "need", "alt_want", "greed"
+    roll_type: Mapped[str] = mapped_column(String(20), nullable=False) 
     
     item = relationship("LootItem", back_populates="rolls")
+
+class BotConfig(Base):
+    __tablename__ = "bot_config"
+
+    setting_key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    setting_value: Mapped[str] = mapped_column(String(255), nullable=False)
