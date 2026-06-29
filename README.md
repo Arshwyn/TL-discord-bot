@@ -1,12 +1,12 @@
-# Throne and Liberty Discord Bot
+# Codex - Throne and Liberty Discord Bot
 
-A fully-featured, database-backed Discord bot built for managing *Throne and Liberty* guilds. It automates roster management, event scheduling, automated attendance auditing, and features a weighted-probability loot distribution system to enforce fair-play.
+Codex is a fully-featured, database-backed Discord bot built for managing *Throne and Liberty* guilds. It automates roster management, event scheduling, automated attendance auditing, and features a weighted-probability loot distribution system to enforce fair-play.
 
 ## 🌟 Core Features
 
 * **Profile & Static Management:** Players register their gear score and weapons. Officers group them into Statics, generating dynamic views of party compositions and average gear scores.
 * **Event Scheduling:** Create recurring or one-time events with automated warning pings. Interactive UI buttons handle RSVPs (Attending, Not Attending, Tentative).
-* **Automated Attendance Auditing:** The bot scans Voice Channels 20 minutes after an event begins to verify RSVPs. It penalizes "Ghosted" players (RSVP'd but no-show) and "Unregistered" players (Showed up but didn't RSVP) on a 30-day leaderboard.
+* **Automated Attendance Auditing:** Codex scans targeted Voice Channels 20 minutes after an event begins to verify RSVPs. It penalizes "Ghosted" players (RSVP'd but no-show) and "Unregistered" players (Showed up but didn't RSVP) on a rolling 30-day leaderboard.
 * **Weighted Loot Roller:** Post loot drops with images. Players roll Need, Alt/Want, or Greed. The bot auto-rolls the winner using a decaying priority mechanic (100% -> 50% -> 0%) based on recent wins to prevent loot funneling. Loot penalties automatically reset bi-weekly.
 
 ---
@@ -27,7 +27,7 @@ cd TL-discord-bot
 ```
 
 **2. Configure Environment Variables (.env):**
-Because this bot is built for plug-and-play deployment, you only need to provide your bot's secret token.
+Because Codex is built for plug-and-play deployment, you only need to provide your bot's secret token.
 ```bash
 cp .env.example .env
 ```
@@ -41,7 +41,7 @@ docker-compose up -d --build
 ```
 
 **4. Initial Discord Setup:**
-Once the bot joins your server, its slash commands will sync globally. An Admin must run the following command inside your server so the bot knows who to ping for events:
+Once Codex joins your server, its slash commands will sync globally. An Admin must run the following command inside your server so the bot knows who to ping for events:
 * `/set_ping_roles @Role1 [@Role2] [@Role3]`
 
 ---
@@ -53,7 +53,7 @@ Once the bot joins your server, its slash commands will sync globally. An Admin 
 ### ⚙️ Bot Configuration
 | Command | Permission | Description |
 | :--- | :--- | :--- |
-| `/set_ping_roles` | Admin Only | Set up to 3 roles (e.g., @Member, @Raider) that the bot will automatically ping when event reminders trigger. |
+| `/set_ping_roles` | Admin Only | Set up to 3 roles (e.g., @Member, @Raider) that Codex will automatically ping when event reminders trigger. |
 
 ### 🛡️ Profile & Statics
 | Command | Permission | Description |
