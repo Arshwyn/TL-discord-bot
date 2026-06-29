@@ -6,10 +6,9 @@ import zoneinfo
 import os
 
 from database.db_setup import get_db
-from database.models import GuildEvent
-from cogs.attendance import AttendanceView
+from database.models import GuildEvent, EventAttendance
 from sqlalchemy.orm import joinedload
-from database.models import EventAttendance
+from cogs.attendance import AttendanceView
 
 class SchedulingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -19,7 +18,6 @@ class SchedulingCog(commands.Cog):
     def cog_unload(self):
         self.check_events_loop.cancel()
 
-    # Shared timezone choices for consistency
     tz_choices = [
         app_commands.Choice(name="Eastern Time (EST/EDT)", value="US/Eastern"),
         app_commands.Choice(name="Central Time (CST/CDT)", value="US/Central"),
@@ -29,6 +27,7 @@ class SchedulingCog(commands.Cog):
     ]
 
     @app_commands.command(name="create_event", description="Schedule a guild event")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
     @app_commands.describe(
         name="Event Name (e.g., Archboss Tevent)",
         date_time="Format: YYYY-MM-DD HH:MM (e.g., 2026-07-15 20:00)",
@@ -44,20 +43,10 @@ class SchedulingCog(commands.Cog):
         app_commands.Choice(name="Bi-Weekly", value=14),
     ])
     async def create_event(
-        self, 
-        interaction: discord.Interaction, 
-        name: str, 
-        date_time: str, 
-        tz_input: str = "UTC",
-        notify_schedule: str = "0", 
-        recurrence: int = 0,
-        requires_rsvp: bool = True,
-        description: str = None
+        self, interaction: discord.Interaction, name: str, date_time: str, 
+        tz_input: str = "UTC", notify_schedule: str = "0", recurrence: int = 0,
+        requires_rsvp: bool = True, description: str = None
     ):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
-            return
-
         try:
             naive_dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
             user_tz = zoneinfo.ZoneInfo(tz_input)
@@ -95,11 +84,12 @@ class SchedulingCog(commands.Cog):
         )
 
     @app_commands.command(name="edit_event", description="Edit an existing event's details")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
     @app_commands.describe(
-        event_id="The ID of the event to edit (Use /list_events to find IDs)",
+        event_id="The ID of the event to edit",
         name="New event name",
         date_time="New Date/Time (YYYY-MM-DD HH:MM)",
-        tz_input="Timezone for the new date/time (Required if changing time)",
+        tz_input="Timezone for the new date/time",
         description="New description"
     )
     @app_commands.choices(tz_input=tz_choices)
@@ -107,11 +97,6 @@ class SchedulingCog(commands.Cog):
         self, interaction: discord.Interaction, event_id: int, 
         name: str = None, date_time: str = None, tz_input: str = None, description: str = None
     ):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
-            return
-
-        # 🛡️ TIMEZONE SAFEGUARD: Ensure both time and timezone are provided together
         if date_time and not tz_input:
             await interaction.response.send_message("❌ **Timezone is required** when updating the Date/Time.", ephemeral=True)
             return
@@ -128,18 +113,15 @@ class SchedulingCog(commands.Cog):
                 await interaction.response.send_message("❌ You cannot edit an event that is already completed.", ephemeral=True)
                 return
 
-            # Apply Updates
             if name: event.name = name
             if description: event.description = description
             
-            # Since we validated above, we know if one exists, both exist
             if date_time and tz_input:
                 try:
                     naive_dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
                     user_tz = zoneinfo.ZoneInfo(tz_input)
                     localized_dt = naive_dt.replace(tzinfo=user_tz)
                     event.start_time = localized_dt.astimezone(timezone.utc)
-                    # Reset the notification tracker so it re-evaluates ping times properly
                     event.notifies_sent = "" 
                 except ValueError:
                     await interaction.response.send_message("❌ **Invalid date format!** Use `YYYY-MM-DD HH:MM`", ephemeral=True)
@@ -147,7 +129,6 @@ class SchedulingCog(commands.Cog):
 
             db.commit()
 
-            # If the event is currently live in the channel, update the actual message
             if event.is_posted and event.message_id:
                 channel = self.bot.get_channel(int(os.getenv("SCHEDULE_CHANNEL_ID")))
                 if channel:
@@ -156,30 +137,23 @@ class SchedulingCog(commands.Cog):
                         embed = msg.embeds[0]
                         embed.title = f"⚔️ {event.name}"
                         embed.description = event.description or ("Sign up using the buttons below." if event.requires_rsvp else "Mark your calendars!")
-                        
-                        # Recalculate target time string
                         unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
                         embed.set_field_at(0, name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
-                        
                         await msg.edit(embed=embed)
                     except discord.NotFound:
-                        pass # Ignored if an admin manually deleted the message
+                        pass 
 
         await interaction.response.send_message(f"✅ Event `{event_id}` has been updated.", ephemeral=True)
 
     @app_commands.command(name="delete_event", description="Cancel and delete an event")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
     async def delete_event(self, interaction: discord.Interaction, event_id: int):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
-            return
-
         with next(get_db()) as db:
             event = db.query(GuildEvent).filter_by(id=event_id).first()
             if not event:
                 await interaction.response.send_message(f"❌ Event ID `{event_id}` not found.", ephemeral=True)
                 return
 
-            # If it is live, edit the message to show it was canceled
             if event.message_id:
                 channel = self.bot.get_channel(int(os.getenv("SCHEDULE_CHANNEL_ID")))
                 if channel:
@@ -190,7 +164,6 @@ class SchedulingCog(commands.Cog):
                         embed.color = discord.Color.red()
                         embed.set_footer(text=f"Event ID: {event.id} | Event has been canceled by an Officer")
                         
-                        # Disable any attached buttons
                         if event.requires_rsvp:
                             view = AttendanceView(event_id=event.id)
                             for child in view.children: child.disabled = True
@@ -206,11 +179,8 @@ class SchedulingCog(commands.Cog):
         await interaction.response.send_message(f"🗑️ Event `{event_id}` has been successfully canceled and removed.", ephemeral=True)
 
     @app_commands.command(name="list_events", description="Debug command to view active scheduled events")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
     async def list_events(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
-            return
-
         with next(get_db()) as db:
             events = db.query(GuildEvent).filter_by(is_completed=False).order_by(GuildEvent.start_time.asc()).all()
 
@@ -231,6 +201,60 @@ class SchedulingCog(commands.Cog):
         if len(report) > 2000: report = report[:1996] + "..."
         await interaction.response.send_message(report, ephemeral=True)
 
+    @app_commands.command(name="view_roster", description="View a detailed breakdown of player sign-ups and gear for an event")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.describe(event_id="The ID of the event roster you want to view")
+    async def view_roster(self, interaction: discord.Interaction, event_id: int):
+        await interaction.response.defer(ephemeral=True)
+
+        with next(get_db()) as db:
+            event = db.query(GuildEvent).filter_by(id=event_id).first()
+            if not event:
+                await interaction.followup.send(f"❌ Event ID `{event_id}` not found.", ephemeral=True)
+                return
+            records = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event_id).all()
+
+        attending_list, absent_list, tentative_list = [], [], []
+
+        for record in records:
+            if record.user:
+                name_display = record.user.ingame_name
+                details = f" [⭐ {record.user.gear_score} | {record.user.primary_weapon} / {record.user.secondary_weapon}]"
+            else:
+                member = interaction.guild.get_member(record.discord_id)
+                name_display = member.display_name if member else f"Unregistered User (<@{record.discord_id}>)"
+                details = " *(No Profile)*"
+
+            entry = f"• **{name_display}**{details}"
+
+            if record.status == "attending": attending_list.append(entry)
+            elif record.status == "absent": absent_list.append(entry)
+            elif record.status == "tentative": tentative_list.append(entry)
+
+        unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
+        
+        embed = discord.Embed(
+            title=f"📋 Roster Breakdown: {event.name}",
+            description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`",
+            color=discord.Color.blue()
+        )
+
+        def safe_join(lst):
+            res = "\n".join(lst) if lst else "*No sign-ups*"
+            return res[:1000] + "\n..." if len(res) > 1024 else res
+
+        embed.add_field(name=f"✅ Attending ({len(attending_list)})", value=safe_join(attending_list), inline=False)
+        embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
+        embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
+
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            await interaction.followup.send("❌ Roster data is too large to render in a single embed.", ephemeral=True)
+
+    # -------------------------------------------------------------
+    # (The check_events_loop task at the bottom remains exactly the same)
+    # -------------------------------------------------------------
     @tasks.loop(seconds=15)
     async def check_events_loop(self):
         await self.bot.wait_until_ready()
@@ -271,7 +295,7 @@ class SchedulingCog(commands.Cog):
                             
                             if event.requires_rsvp:
                                 embed.add_field(name="✅ Attending", value="`0 players`", inline=True)
-                                embed.add_field(name="❌ Not Attending", value="`0 players`", inline=True)
+                                embed.add_field(name="⛔ Not Attending", value="`0 players`", inline=True)
                                 embed.add_field(name="⏳ Tentative", value="`0 players`", inline=True)
                             
                             footer_text = f"Event ID: {event.id}"
@@ -328,70 +352,6 @@ class SchedulingCog(commands.Cog):
                         except discord.NotFound:
                             pass
                     db.commit()
-
-    @app_commands.command(
-        name="view_roster", 
-        description="View a detailed breakdown of player sign-ups and gear for an event"
-    )
-    @app_commands.describe(event_id="The ID of the event roster you want to view")
-    async def view_roster(self, interaction: discord.Interaction, event_id: int):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("❌ Permission denied.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        with next(get_db()) as db:
-            event = db.query(GuildEvent).filter_by(id=event_id).first()
-            if not event:
-                await interaction.followup.send(f"❌ Event ID `{event_id}` not found.", ephemeral=True)
-                return
-
-            # Eagerly load the user profiles
-            records = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event_id).all()
-
-        attending_list = []
-        absent_list = []
-        tentative_list = []
-
-        for record in records:
-            # If they have a profile, use their IG Name and exact gear
-            if record.user:
-                name_display = record.user.ingame_name
-                details = f" [⭐ {record.user.gear_score} | {record.user.primary_weapon} / {record.user.secondary_weapon}]"
-            else:
-                # Fallback to Discord logic if unregistered
-                member = interaction.guild.get_member(record.discord_id)
-                name_display = member.display_name if member else f"Unregistered User (<@{record.discord_id}>)"
-                details = " *(No Profile)*"
-
-            entry = f"• **{name_display}**{details}"
-
-            if record.status == "attending": attending_list.append(entry)
-            elif record.status == "absent": absent_list.append(entry)
-            elif record.status == "tentative": tentative_list.append(entry)
-
-        unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
-        
-        embed = discord.Embed(
-            title=f"📋 Roster Breakdown: {event.name}",
-            description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`",
-            color=discord.Color.blue()
-        )
-
-        # Truncate lists safely to avoid field limits
-        def safe_join(lst):
-            res = "\n".join(lst) if lst else "*No sign-ups*"
-            return res[:1000] + "\n..." if len(res) > 1024 else res
-
-        embed.add_field(name=f"✅ Attending ({len(attending_list)})", value=safe_join(attending_list), inline=False)
-        embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
-        embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
-
-        try:
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except discord.HTTPException:
-            await interaction.followup.send("❌ Roster data is too large to render in a single embed.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SchedulingCog(bot))
