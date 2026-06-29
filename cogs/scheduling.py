@@ -35,7 +35,8 @@ class SchedulingCog(commands.Cog):
         notify_schedule="Comma-separated minutes before start (e.g., '4320, 60, 5, 0')",
         recurrence="Does this event repeat?",
         requires_rsvp="True = Interactive Poll. False = Notification Only.",
-        target_channel="The channel to post this event in (Defaults to current channel)"
+        target_channel="The text channel to post this event in (Defaults to current)",
+        voice_channel="The specific Voice Channel to audit for attendance (Optional)"
     )
     @app_commands.choices(tz_input=tz_choices)
     @app_commands.choices(recurrence=[
@@ -46,7 +47,8 @@ class SchedulingCog(commands.Cog):
     async def create_event(
         self, interaction: discord.Interaction, name: str, date_time: str, 
         tz_input: str = "UTC", notify_schedule: str = "0", recurrence: int = 0,
-        requires_rsvp: bool = True, target_channel: discord.TextChannel = None, description: str = None
+        requires_rsvp: bool = True, target_channel: discord.TextChannel = None, 
+        voice_channel: discord.VoiceChannel = None, description: str = None
     ):
         try:
             naive_dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
@@ -66,7 +68,6 @@ class SchedulingCog(commands.Cog):
             await interaction.response.send_message("❌ **Invalid notification schedule!** Use numbers (e.g., `4320, 60, 5`).", ephemeral=True)
             return
 
-        # Determine target channel
         chosen_channel_id = target_channel.id if target_channel else interaction.channel.id
 
         with next(get_db()) as db:
@@ -74,17 +75,21 @@ class SchedulingCog(commands.Cog):
                 name=name, description=description, start_time=utc_dt,
                 recurrence_days=recurrence, requires_rsvp=requires_rsvp,
                 notify_schedule=clean_schedule_str, notifies_sent="",
-                channel_id=chosen_channel_id, # Link it to the specific channel
+                channel_id=chosen_channel_id,
+                voice_channel_id=voice_channel.id if voice_channel else None,
                 is_posted=False, is_completed=False
             )
             db.add(new_event)
             db.commit()
 
         poll_type = "📊 Interactive Poll" if requires_rsvp else "🔔 Notification Only"
+        vc_target = f"\n**Audit Target:** <#{voice_channel.id}>" if voice_channel else "\n**Audit Target:** All Voice Channels"
+        
         await interaction.response.send_message(
             f"✅ **Event Scheduled!** (Posting in <#{chosen_channel_id}>)\n"
             f"**Event:** {name} `[{'Repeats every ' + str(recurrence) + 'd' if recurrence > 0 else 'One-time'}]`\n"
-            f"**Type:** {poll_type}\n**Ping Warnings:** `{clean_schedule_str}` (Minutes prior)\n"
+            f"**Type:** {poll_type}\n**Ping Warnings:** `{clean_schedule_str}` (Minutes prior)"
+            f"{vc_target}\n"
             f"**Time:** <t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)",
             ephemeral=True
         )
@@ -94,7 +99,8 @@ class SchedulingCog(commands.Cog):
     @app_commands.choices(tz_input=tz_choices)
     async def edit_event(
         self, interaction: discord.Interaction, event_id: int, 
-        name: str = None, date_time: str = None, tz_input: str = None, description: str = None
+        name: str = None, date_time: str = None, tz_input: str = None, 
+        description: str = None, voice_channel: discord.VoiceChannel = None
     ):
         if date_time and not tz_input:
             await interaction.response.send_message("❌ **Timezone is required** when updating the Date/Time.", ephemeral=True)
@@ -108,6 +114,7 @@ class SchedulingCog(commands.Cog):
 
             if name: event.name = name
             if description: event.description = description
+            if voice_channel: event.voice_channel_id = voice_channel.id
             
             if date_time and tz_input:
                 try:
@@ -275,8 +282,7 @@ class SchedulingCog(commands.Cog):
             active_events = db.query(GuildEvent).filter_by(is_completed=False).all()
 
             for event in active_events:
-                # DYNAMIC CHANNEL ROUTING
-                if not event.channel_id: continue # Failsafe for corrupted rows
+                if not event.channel_id: continue
                 channel = self.bot.get_channel(event.channel_id)
                 if not channel: continue
 
@@ -315,6 +321,7 @@ class SchedulingCog(commands.Cog):
                                     name=event.name, description=event.description, start_time=next_time,
                                     recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
                                     notify_schedule=event.notify_schedule, channel_id=event.channel_id,
+                                    voice_channel_id=event.voice_channel_id, # Carry over the specific VC target
                                     notifies_sent="", is_posted=False, is_completed=False
                                 )
                                 db.add(next_event)
@@ -349,9 +356,18 @@ class SchedulingCog(commands.Cog):
                             pass
 
                     active_voice_member_ids = set()
-                    for vc in channel.guild.voice_channels:
-                        for member in vc.members:
-                            active_voice_member_ids.add(member.id)
+                    
+                    # 🎯 NEW: Restricted Channel Audit Logic
+                    if event.voice_channel_id:
+                        vc = channel.guild.get_channel(event.voice_channel_id)
+                        if vc and isinstance(vc, discord.VoiceChannel):
+                            for member in vc.members:
+                                active_voice_member_ids.add(member.id)
+                    else:
+                        # Fallback: Scan all voice channels
+                        for vc in channel.guild.voice_channels:
+                            for member in vc.members:
+                                active_voice_member_ids.add(member.id)
 
                     signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event.id).all()
                     profile_map = {p.discord_id: p for p in db.query(UserProfile).all()}
@@ -394,24 +410,19 @@ class SchedulingCog(commands.Cog):
         cutoff = now - timedelta(days=30)
         
         with next(get_db()) as db:
-            # Query all attendance records from the last 30 days
             records = db.query(AttendanceRecord).filter(AttendanceRecord.event_date >= cutoff).all()
             
         if not records:
             await interaction.followup.send("📭 No attendance records found in the last 30 days.")
             return
             
-        # Group stats by user
         stats = {}
         for r in records:
             if r.discord_id not in stats:
-                # NEW: Added an 'unregistered' tracker bucket
                 stats[r.discord_id] = {"name": r.ingame_name, "present": 0, "ghosted": 0, "unregistered": 0, "total": 0}
             
             stats[r.discord_id]["total"] += 1
             
-            # STRICT MATH: Only formal "Present" grants a point. 
-            # Ghosted and Unregistered add to the total divisor, mathematically tanking their percentage!
             if r.actual_presence == "Present":
                 stats[r.discord_id]["present"] += 1
             elif r.actual_presence == "Ghosted":
@@ -419,7 +430,6 @@ class SchedulingCog(commands.Cog):
             elif r.actual_presence == "Unregistered":
                 stats[r.discord_id]["unregistered"] += 1
                 
-        # Calculate percentages and sort
         leaderboard = []
         for uid, data in stats.items():
             pct = (data["present"] / data["total"]) * 100 if data["total"] > 0 else 0
@@ -433,12 +443,10 @@ class SchedulingCog(commands.Cog):
                 "pct": pct
             })
             
-        # Sort by best percentage, then by highest total attendance as a tie breaker
         leaderboard.sort(key=lambda x: (x["pct"], x["present"]), reverse=True)
         
         lines = []
-        for idx, user in enumerate(leaderboard[:25], 1): # Top 25
-            # NEW: Layout includes the Unregistered warning tag
+        for idx, user in enumerate(leaderboard[:25], 1): 
             lines.append(
                 f"**{idx}.** <@{user['uid']}> (`{user['name']}`) — **{user['pct']:.1f}%** ({user['present']}/{user['total']}) "
                 f"| 👻 {user['ghosted']} Ghosted | ⚠️ {user['unregistered']} Unregistered"

@@ -31,6 +31,9 @@ class GuildEvent(Base):
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
+    # NEW: Specific voice channel to audit for attendance
+    voice_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    
     notify_schedule: Mapped[str] = mapped_column(String(100), default="4320")
     notifies_sent: Mapped[str] = mapped_column(String(100), default="")       
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)        
