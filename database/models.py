@@ -43,3 +43,15 @@ class EventAttendance(Base):
     selected_role: Mapped[str | None] = mapped_column(String(50), nullable=True) 
     event = relationship("GuildEvent", back_populates="signups")
     user = relationship("UserProfile", back_populates="attendance")
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    event_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    discord_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    ingame_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    signup_status: Mapped[str] = mapped_column(String(20), nullable=False) # "attending", "tentative", "absent", "none"
+    actual_presence: Mapped[str] = mapped_column(String(20), nullable=False) # "Present", "Ghosted", "Unregistered"

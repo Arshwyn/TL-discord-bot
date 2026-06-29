@@ -6,7 +6,7 @@ import zoneinfo
 import os
 
 from database.db_setup import get_db
-from database.models import GuildEvent, EventAttendance
+from database.models import GuildEvent, EventAttendance, AttendanceRecord, UserProfile
 from sqlalchemy.orm import joinedload
 from cogs.attendance import AttendanceView
 
@@ -18,6 +18,7 @@ class SchedulingCog(commands.Cog):
     def cog_unload(self):
         self.check_events_loop.cancel()
 
+    # Shared timezone choices for consistency
     tz_choices = [
         app_commands.Choice(name="Eastern Time (EST/EDT)", value="US/Eastern"),
         app_commands.Choice(name="Central Time (CST/CDT)", value="US/Central"),
@@ -27,7 +28,7 @@ class SchedulingCog(commands.Cog):
     ]
 
     @app_commands.command(name="create_event", description="Schedule a guild event")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
     @app_commands.describe(
         name="Event Name (e.g., Archboss Tevent)",
         date_time="Format: YYYY-MM-DD HH:MM (e.g., 2026-07-15 20:00)",
@@ -43,9 +44,15 @@ class SchedulingCog(commands.Cog):
         app_commands.Choice(name="Bi-Weekly", value=14),
     ])
     async def create_event(
-        self, interaction: discord.Interaction, name: str, date_time: str, 
-        tz_input: str = "UTC", notify_schedule: str = "0", recurrence: int = 0,
-        requires_rsvp: bool = True, description: str = None
+        self, 
+        interaction: discord.Interaction, 
+        name: str, 
+        date_time: str, 
+        tz_input: str = "UTC",
+        notify_schedule: str = "0", 
+        recurrence: int = 0,
+        requires_rsvp: bool = True,
+        description: str = None
     ):
         try:
             naive_dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
@@ -84,12 +91,12 @@ class SchedulingCog(commands.Cog):
         )
 
     @app_commands.command(name="edit_event", description="Edit an existing event's details")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
     @app_commands.describe(
-        event_id="The ID of the event to edit",
+        event_id="The ID of the event to edit (Use /list_events to find IDs)",
         name="New event name",
         date_time="New Date/Time (YYYY-MM-DD HH:MM)",
-        tz_input="Timezone for the new date/time",
+        tz_input="Timezone for the new date/time (Required if changing time)",
         description="New description"
     )
     @app_commands.choices(tz_input=tz_choices)
@@ -141,12 +148,12 @@ class SchedulingCog(commands.Cog):
                         embed.set_field_at(0, name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
                         await msg.edit(embed=embed)
                     except discord.NotFound:
-                        pass 
+                        pass
 
         await interaction.response.send_message(f"✅ Event `{event_id}` has been updated.", ephemeral=True)
 
     @app_commands.command(name="delete_event", description="Cancel and delete an event")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
     async def delete_event(self, interaction: discord.Interaction, event_id: int):
         with next(get_db()) as db:
             event = db.query(GuildEvent).filter_by(id=event_id).first()
@@ -179,7 +186,7 @@ class SchedulingCog(commands.Cog):
         await interaction.response.send_message(f"🗑️ Event `{event_id}` has been successfully canceled and removed.", ephemeral=True)
 
     @app_commands.command(name="list_events", description="Debug command to view active scheduled events")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
     async def list_events(self, interaction: discord.Interaction):
         with next(get_db()) as db:
             events = db.query(GuildEvent).filter_by(is_completed=False).order_by(GuildEvent.start_time.asc()).all()
@@ -194,15 +201,14 @@ class SchedulingCog(commands.Cog):
             recurrence_str = f" | 🔁 Every {event.recurrence_days}d" if event.recurrence_days > 0 else ""
             report += (
                 f"🔹 **ID:** `{event.id}` | **Name:** {event.name}{recurrence_str}\n"
-                f" └ *Time:* <t:{unix_ts}:F> (<t:{unix_ts}:R>)\n"
-                f" └ *Notifications Sent:* `[{event.notifies_sent}]` of `[{event.notify_schedule}]`\n\n"
+                f" └ *Time:* <t:{unix_ts}:F> (<t:{unix_ts}:R>)\n\n"
             )
 
         if len(report) > 2000: report = report[:1996] + "..."
         await interaction.response.send_message(report, ephemeral=True)
 
-    @app_commands.command(name="view_roster", description="View a detailed breakdown of player sign-ups and gear for an event")
-    @app_commands.default_permissions(manage_guild=True) # 🔒 HIDDEN FROM REGULAR USERS
+    @app_commands.command(name="view_roster", description="View a deep breakdown of sign-ups and gear targets")
+    @app_commands.default_permissions(manage_guild=True) # 🔒 Protected Command Group
     @app_commands.describe(event_id="The ID of the event roster you want to view")
     async def view_roster(self, interaction: discord.Interaction, event_id: int):
         await interaction.response.defer(ephemeral=True)
@@ -247,14 +253,37 @@ class SchedulingCog(commands.Cog):
         embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
         embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
 
-        try:
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except discord.HTTPException:
-            await interaction.followup.send("❌ Roster data is too large to render in a single embed.", ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # -------------------------------------------------------------
-    # (The check_events_loop task at the bottom remains exactly the same)
-    # -------------------------------------------------------------
+    # =============================================================
+    # NEW SLASH COMMAND: LOOK UP AUDITED PRESENT/GHOST DATA
+    # =============================================================
+    @app_commands.command(name="attendance_summary", description="View the logged presence ledger audit for an event")
+    @app_commands.default_permissions(manage_guild=True)
+    async def attendance_summary(self, interaction: discord.Interaction, event_id: int):
+        await interaction.response.defer(ephemeral=True)
+        
+        with next(get_db()) as db:
+            logs = db.query(AttendanceRecord).filter_by(event_id=event_id).all()
+            
+        if not logs:
+            await interaction.followup.send(f"❌ No automated auditing summary entries located for Event ID `{event_id}`.", ephemeral=True)
+            return
+
+        present, ghosted, unregistered = [], [], []
+        for log in logs:
+            display = f"• {log.ingame_name} (<@{log.discord_id}>)"
+            if log.actual_presence == "Present": present.append(display)
+            elif log.actual_presence == "Ghosted": ghosted.append(display)
+            elif log.actual_presence == "Unregistered": unregistered.append(display)
+
+        embed = discord.Embed(title=f"📜 Presence Audit Ledger: {logs[0].event_name}", color=discord.Color.brand_green())
+        embed.add_field(name=f"✅ Present in Comms Voice ({len(present)})", value="\n".join(present) if present else "*None*", inline=False)
+        embed.add_field(name=f"👻 Ghosted Signed-Up Users ({len(ghosted)})", value="\n".join(ghosted) if ghosted else "*None*", inline=False)
+        embed.add_field(name=f"⚠️ Unregistered Raiders in VC ({len(unregistered)})", value="\n".join(unregistered) if unregistered else "*None*", inline=False)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @tasks.loop(seconds=15)
     async def check_events_loop(self):
         await self.bot.wait_until_ready()
@@ -279,6 +308,7 @@ class SchedulingCog(commands.Cog):
                 schedule = [int(x) for x in event.notify_schedule.split(",")] if event.notify_schedule else []
                 sent = [int(x) for x in event.notifies_sent.split(",")] if event.notifies_sent else []
 
+                # Trigger warnings/initial frames
                 for target_mins in sorted(schedule, reverse=True):
                     if target_mins not in sent and delta_mins <= target_mins:
                         
@@ -295,13 +325,10 @@ class SchedulingCog(commands.Cog):
                             
                             if event.requires_rsvp:
                                 embed.add_field(name="✅ Attending", value="`0 players`", inline=True)
-                                embed.add_field(name="⛔ Not Attending", value="`0 players`", inline=True)
+                                embed.add_field(name="❌ Not Attending", value="`0 players`", inline=True)
                                 embed.add_field(name="⏳ Tentative", value="`0 players`", inline=True)
                             
-                            footer_text = f"Event ID: {event.id}"
-                            if event.recurrence_days > 0:
-                                footer_text += f" | 🔁 Recurs every {event.recurrence_days} days"
-                            embed.set_footer(text=footer_text)
+                            embed.set_footer(text=f"Event ID: {event.id}")
 
                             if event.requires_rsvp:
                                 view = AttendanceView(event_id=event.id)
@@ -336,9 +363,12 @@ class SchedulingCog(commands.Cog):
                         event.notifies_sent = ",".join(map(str, sent))
                         db.commit()
 
-                # Garbage Collection
-                if set(schedule).issubset(set(sent)) and delta_mins < 0:
+                # 🛑 AUTOMATED PRESENT/GHOST AUDIT TIMER: Evaluates exactly 20 minutes after start time
+                if delta_mins <= -20.0 and not event.is_completed:
                     event.is_completed = True
+                    db.commit()
+
+                    # Lockdown the frontend button layout
                     if event.requires_rsvp and event.message_id:
                         try:
                             msg = await channel.fetch_message(event.message_id)
@@ -347,10 +377,54 @@ class SchedulingCog(commands.Cog):
                             
                             embed = msg.embeds[0]
                             embed.color = discord.Color.dark_grey()
-                            embed.set_footer(text=f"Event ID: {event.id} | 🛑 Event Concluded")
+                            embed.set_footer(text=f"Event ID: {event.id} | 🛑 Concluded & Ledger Audited")
                             await msg.edit(embed=embed, view=view)
                         except discord.NotFound:
                             pass
+
+                    # Scrape all active voice channels to pool real-time connections
+                    active_voice_member_ids = set()
+                    guild = channel.guild
+                    for vc in guild.voice_channels:
+                        for member in vc.members:
+                            active_voice_member_ids.add(member.id)
+
+                    # Gather roster signups and general user frames
+                    signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event.id).all()
+                    profile_map = {p.discord_id: p for p in db.query(UserProfile).all()}
+                    audited_user_ids = set()
+
+                    # A. Evaluate explicitly registered RSVPs
+                    for signup in signups:
+                        audited_user_ids.add(signup.discord_id)
+                        ign = signup.user.ingame_name if signup.user else f"Discord User ID: {signup.discord_id}"
+                        
+                        presence = "Ghosted"
+                        if signup.status == "attending" and signup.discord_id in active_voice_member_ids:
+                            presence = "Present"
+                        elif signup.status != "attending":
+                            presence = "Present" if signup.discord_id in active_voice_member_ids else "Absent"
+
+                        record = AttendanceRecord(
+                            event_id=event.id, event_name=event.name, event_date=event.start_time,
+                            discord_id=signup.discord_id, ingame_name=ign, signup_status=signup.status,
+                            actual_presence=presence
+                        )
+                        db.add(record)
+
+                    # B. Catch unregistered members sitting inside the voice comms channels
+                    for active_id in active_voice_member_ids:
+                        if active_id not in audited_user_ids:
+                            user_prof = profile_map.get(active_id)
+                            ign = user_prof.ingame_name if user_prof else f"Discord User ID: {active_id}"
+                            
+                            record = AttendanceRecord(
+                                event_id=event.id, event_name=event.name, event_date=event.start_time,
+                                discord_id=active_id, ingame_name=ign, signup_status="none",
+                                actual_presence="Unregistered"
+                            )
+                            db.add(record)
+
                     db.commit()
 
 async def setup(bot: commands.Bot):
