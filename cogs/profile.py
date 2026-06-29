@@ -30,10 +30,23 @@ class ProfileCog(commands.Cog):
         app_commands.Choice(name="Gauntlets", value="Gauntlets"),
     ]
 
+    # 🟢 NEW: Added an optional `screenshot` attachment parameter
     @profile_group.command(name="setup", description="Register or update your character's weapons and gear score")
-    @app_commands.describe(ingame_name="In-game name", primary_weapon="Main weapon", secondary_weapon="Off-hand weapon", gear_score="Gear score")
+    @app_commands.describe(
+        ingame_name="In-game name", 
+        primary_weapon="Main weapon", 
+        secondary_weapon="Off-hand weapon", 
+        gear_score="Gear score",
+        screenshot="Optional screenshot of your gear/stats for verification"
+    )
     @app_commands.choices(primary_weapon=WEAPON_CHOICES, secondary_weapon=WEAPON_CHOICES)
-    async def setup(self, interaction: discord.Interaction, ingame_name: str, primary_weapon: str, secondary_weapon: str, gear_score: int):
+    async def setup(
+        self, interaction: discord.Interaction, 
+        ingame_name: str, primary_weapon: str, secondary_weapon: str, 
+        gear_score: int, screenshot: discord.Attachment = None
+    ):
+        pic_url = screenshot.url if screenshot else None
+
         with next(get_db()) as db:
             profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id).first()
             if profile:
@@ -41,16 +54,21 @@ class ProfileCog(commands.Cog):
                 profile.primary_weapon = primary_weapon
                 profile.secondary_weapon = secondary_weapon
                 profile.gear_score = gear_score
+                # Only overwrite the existing screenshot if they uploaded a new one
+                if pic_url:
+                    profile.gear_screenshot_url = pic_url
             else:
                 profile = UserProfile(
                     discord_id=interaction.user.id, ingame_name=ingame_name,
-                    primary_weapon=primary_weapon, secondary_weapon=secondary_weapon, gear_score=gear_score
+                    primary_weapon=primary_weapon, secondary_weapon=secondary_weapon, 
+                    gear_score=gear_score, gear_screenshot_url=pic_url
                 )
                 db.add(profile)
             db.commit()
 
+        photo_msg = "\n📸 **Screenshot:** Attached!" if pic_url else ""
         await interaction.response.send_message(
-            f"✅ **Profile Saved!**\n👤 **Name:** {ingame_name}\n⚔️ **Weapons:** {primary_weapon} & {secondary_weapon}\n⭐ **Gear Score:** {gear_score}", 
+            f"✅ **Profile Saved!**\n👤 **Name:** {ingame_name}\n⚔️ **Weapons:** {primary_weapon} & {secondary_weapon}\n⭐ **Gear Score:** {gear_score}{photo_msg}", 
             ephemeral=True
         )
 
@@ -73,6 +91,11 @@ class ProfileCog(commands.Cog):
         embed.add_field(name="⚔️ Loadout", value=f"{w1} {profile.primary_weapon} / {w2} {profile.secondary_weapon}", inline=True)
         embed.add_field(name="⭐ Gear Score", value=f"{profile.gear_score}", inline=True)
         embed.set_thumbnail(url=target.display_avatar.url)
+        
+        # 🟢 NEW: If they uploaded a screenshot, display it large on the profile!
+        if profile.gear_screenshot_url:
+            embed.set_image(url=profile.gear_screenshot_url)
+
         await interaction.response.send_message(embed=embed)
 
     @profile_group.command(name="directory", description="View a list of all registered guild members")
@@ -91,7 +114,11 @@ class ProfileCog(commands.Cog):
             w1 = WEAPON_EMOJIS.get(p.primary_weapon, "")
             w2 = WEAPON_EMOJIS.get(p.secondary_weapon, "")
             static_tag = f" [{p.static_group}]" if p.static_group else ""
-            report_lines.append(f"• <@{p.discord_id}> (`{p.ingame_name}`){static_tag} [⭐ **{p.gear_score}** | {w1}{w2}]")
+            
+            # 🟢 NEW: Add a tiny camera emoji indicator in the directory so officers know who has verified
+            pic_tag = " 📸" if p.gear_screenshot_url else ""
+            
+            report_lines.append(f"• <@{p.discord_id}> (`{p.ingame_name}`){static_tag} [⭐ **{p.gear_score}** | {w1}{w2}]{pic_tag}")
 
         embeds, current_desc = [], ""
         for line in report_lines:
@@ -112,7 +139,6 @@ class ProfileCog(commands.Cog):
         with next(get_db()) as db:
             profile = db.query(UserProfile).filter_by(discord_id=member.id).first()
             if not profile:
-                # Silently init a blank profile if they haven't registered yet so we can still group them
                 profile = UserProfile(discord_id=member.id, ingame_name=member.display_name)
                 db.add(profile)
             
@@ -136,10 +162,9 @@ class ProfileCog(commands.Cog):
     @static_group.command(name="list", description="View all static parties, their members, and average gear scores")
     @app_commands.describe(group_name="Optional: View a specific static party only")
     async def static_list(self, interaction: discord.Interaction, group_name: str = None):
-        await interaction.response.defer(ephemeral=False) # Not ephemeral, so the guild can see their statics!
+        await interaction.response.defer(ephemeral=False)
 
         with next(get_db()) as db:
-            # Query all profiles that are assigned to a static (or a specific static if requested)
             if group_name:
                 profiles = db.query(UserProfile).filter(UserProfile.static_group == group_name).all()
             else:
@@ -150,7 +175,6 @@ class ProfileCog(commands.Cog):
             await interaction.followup.send(msg)
             return
 
-        # Sort the results into buckets based on static name
         statics_dict = {}
         for p in profiles:
             if p.static_group not in statics_dict:
@@ -158,12 +182,8 @@ class ProfileCog(commands.Cog):
             statics_dict[p.static_group].append(p)
 
         embeds = []
-        # Build one Discord Embed card per Static Party
         for static_name, members in statics_dict.items():
-            # Sort members within the static by highest Gear Score
             members.sort(key=lambda x: x.gear_score, reverse=True)
-            
-            # Calculate the group's average GS
             avg_gs = sum(m.gear_score for m in members) // len(members)
             
             lines = []
@@ -184,7 +204,6 @@ class ProfileCog(commands.Cog):
             embed.set_footer(text=f"Total Members: {len(members)} | Average Gear Score: {avg_gs}")
             embeds.append(embed)
 
-        # Discord allows up to 10 embeds per message. Chunk if they have a ton of statics.
         for i in range(0, len(embeds), 10):
             await interaction.followup.send(embeds=embeds[i:i+10])
 

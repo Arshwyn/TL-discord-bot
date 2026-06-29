@@ -15,6 +15,9 @@ class UserProfile(Base):
     gear_score: Mapped[int] = mapped_column(Integer, default=0)
     static_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
     
+    # NEW: Store a link to the user's gear screenshot
+    gear_screenshot_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
     # Tracking loot wins for dynamic roll weighting
     loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
     
@@ -31,7 +34,6 @@ class GuildEvent(Base):
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
-    # NEW: Specific voice channel to audit for attendance
     voice_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
     notify_schedule: Mapped[str] = mapped_column(String(100), default="4320")
@@ -75,10 +77,10 @@ class LootItem(Base):
     is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False) 
     
-    # NEW: Store the winner so we can refund them if an admin rerolls
     winner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
     rolls = relationship("LootRoll", back_populates="item", cascade="all, delete-orphan")
+
 class LootRoll(Base):
     __tablename__ = "loot_rolls"
 
