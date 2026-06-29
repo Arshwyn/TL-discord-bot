@@ -58,3 +58,28 @@ class AttendanceRecord(Base):
     ingame_name: Mapped[str] = mapped_column(String(50), nullable=False)
     signup_status: Mapped[str] = mapped_column(String(20), nullable=False) 
     actual_presence: Mapped[str] = mapped_column(String(20), nullable=False)
+
+class LootItem(Base):
+    __tablename__ = "loot_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    image_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    
+    # NEW: Timestamp so the bot knows how old the post is
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False) 
+    
+    rolls = relationship("LootRoll", back_populates="item", cascade="all, delete-orphan")
+
+class LootRoll(Base):
+    __tablename__ = "loot_rolls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    loot_item_id: Mapped[int] = mapped_column(ForeignKey("loot_items.id", ondelete="CASCADE"))
+    discord_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    roll_type: Mapped[str] = mapped_column(String(20), nullable=False) # "need", "alt_want", "greed"
+    
+    item = relationship("LootItem", back_populates="rolls")
