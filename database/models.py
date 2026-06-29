@@ -13,10 +13,7 @@ class UserProfile(Base):
     primary_weapon: Mapped[str | None] = mapped_column(String(50), nullable=True)     
     secondary_weapon: Mapped[str | None] = mapped_column(String(50), nullable=True)   
     gear_score: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # NEW: Tracks which static party the user belongs to
     static_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    
     attendance = relationship("EventAttendance", back_populates="user", cascade="all, delete-orphan")
 
 class GuildEvent(Base):
@@ -28,6 +25,9 @@ class GuildEvent(Base):
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     recurrence_days: Mapped[int] = mapped_column(Integer, default=0) 
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    # NEW: Tracks which channel this specific event belongs to
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     
     notify_schedule: Mapped[str] = mapped_column(String(100), default="4320")
     notifies_sent: Mapped[str] = mapped_column(String(100), default="")       
