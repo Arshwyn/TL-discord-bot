@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-from database.db_setup import init_db
+from alembic.config import Config
+from alembic import command
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -16,8 +17,11 @@ class TLGuildBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        print("Initializing persistence layer...")
-        init_db()
+        print("Initializing database migrations...")
+        
+        # 🟢 NEW: Automatically apply Alembic migrations on startup
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
         print("Database sync complete.")
 
         os.makedirs('./cogs', exist_ok=True)
@@ -25,7 +29,6 @@ class TLGuildBot(commands.Bot):
             if filename.endswith('.py'):
                 await self.load_extension(f'cogs.{filename[:-3]}')
         
-        # GLOBAL COMMAND SYNC: Automatically works in ANY server the bot joins!
         await self.tree.sync()
         print("Synced slash commands globally.")
 

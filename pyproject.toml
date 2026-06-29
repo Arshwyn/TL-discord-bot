@@ -8,6 +8,7 @@ dependencies = [
     "sqlalchemy>=2.0.30",
     "python-dotenv>=1.0.1",
     "tzdata>=2026.2",
+    "alembic>=1.13.1",
 ]
 
 # Tells uv this is an application, not a library to be built
