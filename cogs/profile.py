@@ -35,18 +35,15 @@ class ProfileCog(commands.Cog):
         app_commands.Choice(name="PvP Content", value="PvP")
     ]
 
-    # 🟢 NEW: Autocomplete logic for a user's own builds (used in /profile update)
     async def update_build_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         with next(get_db()) as db:
             profiles = db.query(UserProfile).filter_by(discord_id=interaction.user.id).all()
             return [
                 app_commands.Choice(name=p.build_name, value=p.build_name)
                 for p in profiles if current.lower() in p.build_name.lower()
-            ][:25] # Discord limits autocomplete lists to 25 options
+            ][:25]
 
-    # 🟢 NEW: Autocomplete logic that checks the targeted member's builds (used in /profile view)
     async def view_build_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        # Check if they selected a member in the previous slash command box; default to themselves
         target_id = interaction.namespace.member or interaction.user.id
         with next(get_db()) as db:
             profiles = db.query(UserProfile).filter_by(discord_id=target_id).all()
@@ -108,7 +105,7 @@ class ProfileCog(commands.Cog):
         )
 
     @profile_group.command(name="update", description="Update parts of an existing build")
-    @app_commands.autocomplete(build_name=update_build_autocomplete) # 🟢 Linked Autocomplete
+    @app_commands.autocomplete(build_name=update_build_autocomplete)
     @app_commands.describe(
         build_name="Select the build you want to update",
         gear_score="Your updated gear score value",
@@ -169,7 +166,7 @@ class ProfileCog(commands.Cog):
         )
 
     @profile_group.command(name="delete", description="Permanently delete one of your character build profiles")
-    @app_commands.autocomplete(build_name=update_build_autocomplete) # Reuses your personal build dropdown list
+    @app_commands.autocomplete(build_name=update_build_autocomplete)
     @app_commands.describe(build_name="Select the specific build profile you want to permanently delete")
     async def delete_build(self, interaction: discord.Interaction, build_name: str):
         with next(get_db()) as db:
@@ -182,7 +179,6 @@ class ProfileCog(commands.Cog):
                 )
                 return
 
-            # Remove the row from the database
             db.delete(profile)
             db.commit()
 
@@ -192,7 +188,7 @@ class ProfileCog(commands.Cog):
         )
 
     @profile_group.command(name="view", description="View a member's character profile(s)")
-    @app_commands.autocomplete(build_name=view_build_autocomplete) # 🟢 Linked Autocomplete
+    @app_commands.autocomplete(build_name=view_build_autocomplete)
     @app_commands.describe(member="The user to check", build_name="Optional: Select a specific build. Leave blank to see all.")
     async def view(self, interaction: discord.Interaction, member: discord.Member = None, build_name: str = None):
         target = member or interaction.user
@@ -239,43 +235,80 @@ class ProfileCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @profile_group.command(name="directory", description="View a list of all registered guild builds")
+    # 🟢 MODIFIED: Unified directory command
+    @profile_group.command(name="directory", description="View a unified list of all registered guild builds")
     @app_commands.default_permissions(manage_guild=True) 
-    @app_commands.choices(build_type=BUILD_CHOICES)
-    async def directory(self, interaction: discord.Interaction, build_type: str = "PvE"):
+    async def directory(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
         with next(get_db()) as db:
-            profiles = db.query(UserProfile).filter_by(build_type=build_type).order_by(UserProfile.gear_score.desc()).all()
+            # Pull all profiles sorted entirely by gear score globally
+            profiles = db.query(UserProfile).order_by(UserProfile.gear_score.desc()).all()
 
         if not profiles:
-            await interaction.followup.send(f"📭 No guild members have registered a {build_type} build yet.", ephemeral=True)
+            await interaction.followup.send("📭 No guild members have registered any builds yet.", ephemeral=True)
             return
 
-        report_lines = []
+        pve_lines = []
+        pvp_lines = []
+
         for p in profiles:
             w1 = WEAPON_EMOJIS.get(p.primary_weapon, "")
             w2 = WEAPON_EMOJIS.get(p.secondary_weapon, "")
             static_tag = f" [{p.static_group}]" if p.static_group else ""
             pic_tag = " 📸" if p.gear_screenshot_url else ""
             
-            report_lines.append(f"• <@{p.discord_id}> (`{p.ingame_name}`){static_tag} - *{p.build_name}* [⭐ **{p.gear_score}** | {w1}{w2}]{pic_tag}")
-
-        embeds, current_desc = [], ""
-        for line in report_lines:
-            if len(current_desc) + len(line) > 4000:
-                embeds.append(discord.Embed(title=f"🛡️ Guild {build_type} Profile Directory", description=current_desc, color=discord.Color.purple()))
-                current_desc = line + "\n"
+            line_str = f"• <@{p.discord_id}> (`{p.ingame_name}`){static_tag} - *{p.build_name}* [⭐ **{p.gear_score}** | {w1}{w2}]{pic_tag}"
+            
+            # Segregate them internally for cleanly formatting the embed
+            if p.build_type == "PvE":
+                pve_lines.append(line_str)
             else:
-                current_desc += line + "\n"
-        if current_desc: embeds.append(discord.Embed(title=f"🛡️ Guild {build_type} Profile Directory", description=current_desc, color=discord.Color.purple()))
-        await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
+                pvp_lines.append(line_str)
+
+        embeds = []
+        current_desc = ""
+
+        def flush_embed(desc):
+            if desc.strip():
+                embeds.append(discord.Embed(title="🛡️ Guild Profile Directory", description=desc, color=discord.Color.blue()))
+
+        if pve_lines:
+            current_desc += "**🟢 PvE Configurations**\n"
+            for line in pve_lines:
+                if len(current_desc) + len(line) > 3900:
+                    flush_embed(current_desc)
+                    current_desc = "**🟢 PvE Configurations (Cont.)**\n" + line + "\n"
+                else:
+                    current_desc += line + "\n"
+            current_desc += "\n" # Spacing between lists
+
+        if pvp_lines:
+            header = "**🔴 PvP Configurations**\n"
+            if len(current_desc) + len(header) > 3900:
+                flush_embed(current_desc)
+                current_desc = header
+            else:
+                current_desc += header
+
+            for line in pvp_lines:
+                if len(current_desc) + len(line) > 3900:
+                    flush_embed(current_desc)
+                    current_desc = "**🔴 PvP Configurations (Cont.)**\n" + line + "\n"
+                else:
+                    current_desc += line + "\n"
+
+        flush_embed(current_desc)
+
+        # Loop through pages of embeds just in case the guild directory exceeds Discord limits
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
 
     @profile_group.command(name="prune", description="Scan the guild database and delete profiles of users who have left the server")
     @app_commands.default_permissions(manage_guild=True)
     async def prune_left_members(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Fetch all unique discord_ids that currently have records
         with next(get_db()) as db:
             all_profiles = db.query(UserProfile).all()
             
@@ -291,10 +324,8 @@ class ProfileCog(commands.Cog):
                     continue
                 checked_ids.add(profile.discord_id)
 
-                # Check if the ID still belongs to a member in this specific Discord server
                 member = interaction.guild.get_member(profile.discord_id)
                 if not member:
-                    # Member is gone! Delete all rows linked to this user ID
                     ghost_builds = db.query(UserProfile).filter_by(discord_id=profile.discord_id).all()
                     for b in ghost_builds:
                         db.delete(b)
