@@ -270,6 +270,44 @@ class ProfileCog(commands.Cog):
         if current_desc: embeds.append(discord.Embed(title=f"🛡️ Guild {build_type} Profile Directory", description=current_desc, color=discord.Color.purple()))
         await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
 
+    @profile_group.command(name="prune", description="Scan the guild database and delete profiles of users who have left the server")
+    @app_commands.default_permissions(manage_guild=True)
+    async def prune_left_members(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Fetch all unique discord_ids that currently have records
+        with next(get_db()) as db:
+            all_profiles = db.query(UserProfile).all()
+            
+            if not all_profiles:
+                await interaction.followup.send("📭 The profile database is completely empty. Nothing to prune.", ephemeral=True)
+                return
+
+            pruned_count = 0
+            checked_ids = set()
+
+            for profile in all_profiles:
+                if profile.discord_id in checked_ids:
+                    continue
+                checked_ids.add(profile.discord_id)
+
+                # Check if the ID still belongs to a member in this specific Discord server
+                member = interaction.guild.get_member(profile.discord_id)
+                if not member:
+                    # Member is gone! Delete all rows linked to this user ID
+                    ghost_builds = db.query(UserProfile).filter_by(discord_id=profile.discord_id).all()
+                    for b in ghost_builds:
+                        db.delete(b)
+                    pruned_count += 1
+            
+            if pruned_count > 0:
+                db.commit()
+
+        if pruned_count > 0:
+            await interaction.followup.send(f"✅ **Prune Complete!** Identified and permanently deleted profiles for **{pruned_count}** former members who are no longer in the server.", ephemeral=True)
+        else:
+            await interaction.followup.send("✅ **Scan Complete:** All registered profiles match active members currently inside the server. Zero ghosts found!", ephemeral=True)
+
     # ==========================================
     # STATIC MANAGEMENT COMMANDS
     # ==========================================
@@ -348,6 +386,17 @@ class ProfileCog(commands.Cog):
 
         for i in range(0, len(embeds), 10):
             await interaction.followup.send(embeds=embeds[i:i+10])
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Automatically prunes database profiles when a user leaves the server."""
+        with next(get_db()) as db:
+            profiles = db.query(UserProfile).filter_by(discord_id=member.id).all()
+            if profiles:
+                for p in profiles:
+                    db.delete(p)
+                db.commit()
+                print(f"🗑️ Automated Prune: Removed all build profiles for {member.display_name} ({member.id}) because they left the server.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ProfileCog(bot))

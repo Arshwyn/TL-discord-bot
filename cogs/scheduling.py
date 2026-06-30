@@ -14,9 +14,11 @@ class SchedulingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_events_loop.start()
+        self.cleanup_attendance_loop.start() # 🟢 NEW: Start attendance cleaner
 
     def cog_unload(self):
         self.check_events_loop.cancel()
+        self.cleanup_attendance_loop.cancel() # 🟢 NEW: Cancel attendance cleaner
 
     tz_choices = [
         app_commands.Choice(name="Eastern Time (EST/EDT)", value="US/Eastern"),
@@ -486,6 +488,31 @@ class SchedulingCog(commands.Cog):
         embed.set_footer(text="Data compiled from automated voice channel audits. Unregistered appearances penalize score.")
         
         await interaction.followup.send(embed=embed)
+
+    @tasks.loop(hours=24)
+    async def cleanup_attendance_loop(self):
+        """Automatically purges temporary event signups older than 14 days to prevent database bloat."""
+        await self.bot.wait_until_ready()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff_date = now - timedelta(days=14)
+        
+        with next(get_db()) as db:
+            # Find all completed events that finished more than 14 days ago
+            old_completed_events = db.query(GuildEvent).filter(
+                GuildEvent.is_completed == True,
+                GuildEvent.start_time <= cutoff_date
+            ).all()
+            
+            if old_completed_events:
+                event_ids = [e.id for e in old_completed_events]
+                
+                # Delete the signups matching those event IDs
+                deleted_rows = db.query(EventAttendance).filter(
+                    EventAttendance.event_id.in_(event_ids)
+                ).delete(synchronize_session=False)
+                
+                db.commit()
+                print(f"🧹 Database Cleanup: Purged {deleted_rows} temporary signup rows from events concluded over 2 weeks ago.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SchedulingCog(bot))
