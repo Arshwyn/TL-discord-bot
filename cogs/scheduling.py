@@ -323,27 +323,33 @@ class SchedulingCog(commands.Cog):
         with next(get_db()) as db:
             logs = db.query(AttendanceRecord).filter_by(event_id=event_id).all()
             
-        if not logs:
-            await interaction.followup.send(f"❌ No automated auditing summary entries located for Event ID `{event_id}`.", ephemeral=True)
-            return
+            if not logs:
+                await interaction.followup.send(f"❌ No automated auditing summary entries located for Event ID `{event_id}`.", ephemeral=True)
+                return
+
+            # Grab all LIVE profiles to override old snapshot data
+            user_ids = [log.discord_id for log in logs]
+            profiles = db.query(UserProfile).filter(UserProfile.discord_id.in_(user_ids)).all()
 
         present, ghosted, unregistered = [], [], []
+        
         for log in logs:
-            ign = log.ingame_name
-            
-            # If the database has an old ugly record or the new "Unregistered" fallback
-            if ign.startswith("Discord User ID:") or ign == "Unregistered":
-                # Try to get their server profile
+            # 1. Try to get their LIVE In-Game Name
+            user_profs = [p for p in profiles if p.discord_id == log.discord_id]
+            if user_profs:
+                ign = user_profs[0].ingame_name
+            else:
+                # 2. Fallback to Server Nickname if no profile exists
                 member = interaction.guild.get_member(log.discord_id)
                 if member:
                     ign = member.display_name
                 else:
-                    # If they left the server, try to grab their global Discord username
+                    # 3. Fallback to Discord Username if they left the server completely
                     user = self.bot.get_user(log.discord_id)
-                    ign = user.name if user else "Unknown/Left Server"
+                    ign = user.name if user else "Unknown User"
 
             display = f"• {ign} (<@{log.discord_id}>)"
-                
+
             if log.actual_presence == "Present": present.append(display)
             elif log.actual_presence == "Ghosted": ghosted.append(display)
             elif log.actual_presence == "Unregistered": unregistered.append(display)
