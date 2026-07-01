@@ -105,10 +105,10 @@ class ProfileCog(commands.Cog):
             ephemeral=True
         )
 
-    @profile_group.command(name="update", description="Update parts of an existing build")
+    @profile_group.command(name="update", description="Update parts of an existing build or your global IGN")
     @app_commands.autocomplete(build_name=update_build_autocomplete)
     @app_commands.describe(
-        build_name="Select the build you want to update",
+        build_name="Required if updating stats. Leave blank if ONLY updating your IGN.",
         gear_score="Your updated gear score value",
         ingame_name="Update your name across all your builds if you used a name change ticket",
         primary_weapon="Change your main weapon selection",
@@ -118,51 +118,162 @@ class ProfileCog(commands.Cog):
     )
     @app_commands.choices(primary_weapon=WEAPON_CHOICES, secondary_weapon=WEAPON_CHOICES, build_type=BUILD_CHOICES)
     async def update(
-        self, interaction: discord.Interaction, build_name: str,
+        self, interaction: discord.Interaction, 
+        build_name: str = None, # Made optional
         gear_score: int = None, ingame_name: str = None,
         primary_weapon: str = None, secondary_weapon: str = None,
         build_type: str = None, screenshot: discord.Attachment = None
     ):
-        with next(get_db()) as db:
-            profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=build_name).first()
-            
-            if not profile:
-                await interaction.response.send_message(
-                    f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", 
-                    ephemeral=True
-                )
-                return
+        # 1. Enforce build_name requirement for build-specific changes
+        build_specific_changes = [gear_score, primary_weapon, secondary_weapon, build_type, screenshot]
+        if not build_name and any(x is not None for x in build_specific_changes):
+            await interaction.response.send_message("❌ You must specify a **build_name** if you want to update your gear score, weapons, or build type.", ephemeral=True)
+            return
 
+        with next(get_db()) as db:
             changes = []
-            if gear_score is not None:
-                profile.gear_score = gear_score
-                changes.append(f"⭐ **Gear Score:** Updated to {gear_score}")
-            if primary_weapon is not None:
-                profile.primary_weapon = primary_weapon
-                changes.append(f"⚔️ **Primary Weapon:** Changed to {primary_weapon}")
-            if secondary_weapon is not None:
-                profile.secondary_weapon = secondary_weapon
-                changes.append(f"🛡️ **Secondary Weapon:** Changed to {secondary_weapon}")
-            if build_type is not None:
-                profile.build_type = build_type
-                changes.append(f"🏷️ **Build Tag:** Changed to {build_type}")
-            if screenshot is not None:
-                profile.gear_screenshot_url = screenshot.url
-                changes.append("📸 **Verification Screenshot:** Updated image track.")
+            
+            # 2. Handle Global IGN Change (doesn't need a specific build)
             if ingame_name is not None:
                 all_builds = db.query(UserProfile).filter_by(discord_id=interaction.user.id).all()
+                if not all_builds:
+                    await interaction.response.send_message("⚠️ You don't have any profiles to update.", ephemeral=True)
+                    return
                 for b in all_builds:
                     b.ingame_name = ingame_name
                 changes.append(f"👤 **In-Game Name:** Adjusted globally to `{ingame_name}`")
 
+            # 3. Handle Build-Specific Changes
+            if build_name is not None:
+                profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=build_name).first()
+                if not profile:
+                    await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
+                    return
+
+                if gear_score is not None:
+                    profile.gear_score = gear_score
+                    changes.append(f"⭐ **Gear Score:** Updated to {gear_score}")
+                if primary_weapon is not None:
+                    profile.primary_weapon = primary_weapon
+                    changes.append(f"⚔️ **Primary Weapon:** Changed to {primary_weapon}")
+                if secondary_weapon is not None:
+                    profile.secondary_weapon = secondary_weapon
+                    changes.append(f"🛡️ **Secondary Weapon:** Changed to {secondary_weapon}")
+                if build_type is not None:
+                    profile.build_type = build_type
+                    changes.append(f"🏷️ **Build Tag:** Changed to {build_type}")
+                if screenshot is not None:
+                    profile.gear_screenshot_url = screenshot.url
+                    changes.append("📸 **Verification Screenshot:** Updated image track.")
+
             if not changes:
                 await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
                 return
+                
             db.commit()
 
+        target_name = f"Build '{build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.response.send_message(
-            f"✅ **Build '{build_name}' Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}", 
+            f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}", 
+            ephemeral=True
+        )
+
+    @profile_group.command(name="admin_update", description="Admin: Override and update a specific member's build")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.autocomplete(build_name=view_build_autocomplete)
+    @app_commands.describe(
+        member="The guild member whose profile you want to update",
+        build_name="Required if updating stats. Leave blank if ONLY updating their IGN.",
+        gear_score="Updated gear score value",
+        ingame_name="Update the name across all their builds (e.g. to fix a typo)",
+        primary_weapon="Change main weapon selection",
+        secondary_weapon="Change off-hand weapon selection",
+        build_type="Change the tag (PvE/PvP/PvX) for this build"
+    )
+    @app_commands.choices(primary_weapon=WEAPON_CHOICES, secondary_weapon=WEAPON_CHOICES, build_type=BUILD_CHOICES)
+    async def admin_update(
+        self, interaction: discord.Interaction, member: discord.Member, 
+        build_name: str = None, # Made Optional
+        gear_score: int = None, ingame_name: str = None,
+        primary_weapon: str = None, secondary_weapon: str = None,
+        build_type: str = None
+    ):
+        # 1. Enforce build_name requirement for build-specific changes
+        build_specific_changes = [gear_score, primary_weapon, secondary_weapon, build_type]
+        if not build_name and any(x is not None for x in build_specific_changes):
+            await interaction.response.send_message("❌ You must specify a **build_name** to update gear score, weapons, or build type for this user.", ephemeral=True)
+            return
+
+        with next(get_db()) as db:
+            changes = []
+            
+            # 2. Handle Global IGN Change
+            if ingame_name is not None:
+                all_builds = db.query(UserProfile).filter_by(discord_id=member.id).all()
+                if not all_builds:
+                    await interaction.response.send_message(f"⚠️ {member.mention} doesn't have any profiles to update.", ephemeral=True)
+                    return
+                for b in all_builds:
+                    b.ingame_name = ingame_name
+                changes.append(f"👤 **In-Game Name:** Adjusted globally to `{ingame_name}`")
+
+            # 3. Handle Build-Specific Changes
+            if build_name is not None:
+                profile = db.query(UserProfile).filter_by(discord_id=member.id, build_name=build_name).first()
+                if not profile:
+                    await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}** for {member.mention}.", ephemeral=True)
+                    return
+
+                if gear_score is not None:
+                    profile.gear_score = gear_score
+                    changes.append(f"⭐ **Gear Score:** Updated to {gear_score}")
+                if primary_weapon is not None:
+                    profile.primary_weapon = primary_weapon
+                    changes.append(f"⚔️ **Primary Weapon:** Changed to {primary_weapon}")
+                if secondary_weapon is not None:
+                    profile.secondary_weapon = secondary_weapon
+                    changes.append(f"🛡️ **Secondary Weapon:** Changed to {secondary_weapon}")
+                if build_type is not None:
+                    profile.build_type = build_type
+                    changes.append(f"🏷️ **Build Tag:** Changed to {build_type}")
+
+            if not changes:
+                await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
+                return
+                
+            db.commit()
+
+        target_name = f"Build '{build_name}'" if build_name else "Global Profile"
+        changes_msg = "\n".join(changes)
+        await interaction.response.send_message(
+            f"✅ **{target_name} for {member.mention} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}", 
+            ephemeral=True
+        )
+
+    @profile_group.command(name="admin_delete", description="Admin: Permanently delete a member's build profile")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.autocomplete(build_name=view_build_autocomplete)
+    @app_commands.describe(
+        member="The guild member whose profile you want to delete",
+        build_name="Select the specific build profile to permanently delete"
+    )
+    async def admin_delete(self, interaction: discord.Interaction, member: discord.Member, build_name: str):
+        with next(get_db()) as db:
+            profile = db.query(UserProfile).filter_by(discord_id=member.id, build_name=build_name).first()
+            
+            if not profile:
+                await interaction.response.send_message(
+                    f"❌ Could not find a build named **{build_name}** for {member.mention}. Operation canceled.", 
+                    ephemeral=True
+                )
+                return
+
+            db.delete(profile)
+            db.commit()
+
+        await interaction.response.send_message(
+            f"🗑️ **Build Profile Deleted!** The build **'{build_name}'** has been permanently removed from {member.mention}'s account.", 
             ephemeral=True
         )
 
