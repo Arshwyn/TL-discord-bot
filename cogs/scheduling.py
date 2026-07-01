@@ -167,16 +167,17 @@ class SchedulingCog(commands.Cog):
 
             # 🟢 NEW: Separate this instance from the recurrence chain if requested
             if this_occurrence_only and event.recurrence_days > 0:
-                # Spawn the next event early using the original, unedited properties
-                next_time = event.start_time + timedelta(days=event.recurrence_days)
-                next_event = GuildEvent(
-                    name=event.name, description=event.description, game_type=event.game_type, start_time=next_time,
-                    recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
-                    notify_schedule=event.notify_schedule, channel_id=event.channel_id,
-                    voice_channel_id=event.voice_channel_id, 
-                    notifies_sent="", is_posted=False, is_completed=False
-                )
-                db.add(next_event)
+                # Only spawn the next event if the automated loop hasn't already posted/spawned it
+                if not event.is_posted:
+                    next_time = event.start_time + timedelta(days=event.recurrence_days)
+                    next_event = GuildEvent(
+                        name=event.name, description=event.description, game_type=event.game_type, start_time=next_time,
+                        recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
+                        notify_schedule=event.notify_schedule, channel_id=event.channel_id,
+                        voice_channel_id=event.voice_channel_id, 
+                        notifies_sent="", is_posted=False, is_completed=False
+                    )
+                    db.add(next_event)
                 
                 # Sever the current event from the chain so it doesn't spawn another one later
                 event.recurrence_days = 0
