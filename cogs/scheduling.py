@@ -329,11 +329,20 @@ class SchedulingCog(commands.Cog):
 
         present, ghosted, unregistered = [], [], []
         for log in logs:
-            # Check if they have the ugly fallback name from the database
-            if log.ingame_name.startswith("Discord User ID:"):
-                display = f"• <@{log.discord_id}>"
-            else:
-                display = f"• {log.ingame_name} (<@{log.discord_id}>)"
+            ign = log.ingame_name
+            
+            # If the database has an old ugly record or the new "Unregistered" fallback
+            if ign.startswith("Discord User ID:") or ign == "Unregistered":
+                # Try to get their server profile
+                member = interaction.guild.get_member(log.discord_id)
+                if member:
+                    ign = member.display_name
+                else:
+                    # If they left the server, try to grab their global Discord username
+                    user = self.bot.get_user(log.discord_id)
+                    ign = user.name if user else "Unknown/Left Server"
+
+            display = f"• {ign} (<@{log.discord_id}>)"
                 
             if log.actual_presence == "Present": present.append(display)
             elif log.actual_presence == "Ghosted": ghosted.append(display)
