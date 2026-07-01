@@ -3,7 +3,7 @@ from discord.ext import commands
 from sqlalchemy.orm import joinedload
 
 from database.db_setup import get_db
-from database.models import EventAttendance, GuildEvent
+from database.models import EventAttendance, GuildEvent, UserProfile
 
 WEAPON_EMOJIS = {
     "Greatsword": "🗡️", "Sword and Shield": "🛡️", "Dagger": "🔪",
@@ -12,7 +12,6 @@ WEAPON_EMOJIS = {
 }
 
 class AttendanceView(discord.ui.View):
-    # 🟢 ALLOW EVENT ID TO BE NONE FOR PERSISTENT RELOADS
     def __init__(self, event_id: int = None):
         super().__init__(timeout=None)
         self.event_id = event_id
@@ -21,7 +20,6 @@ class AttendanceView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         with next(get_db()) as db:
-            # 🟢 PERSISTENCY CHECK: If memory was wiped, find the event by the Message ID
             current_event_id = self.event_id
             if not current_event_id:
                 event_record = db.query(GuildEvent).filter_by(message_id=interaction.message.id).first()
@@ -41,7 +39,22 @@ class AttendanceView(discord.ui.View):
                 db.add(attendance)
             db.commit()
 
-            all_signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=current_event_id).all()
+            all_signups = db.query(EventAttendance).filter_by(event_id=current_event_id).all()
+            user_ids = [s.discord_id for s in all_signups]
+            
+            # 🟢 NEW: Smart Fallback Logic (Exact Match > PvX Match > Nothing)
+            profiles = db.query(UserProfile).filter(UserProfile.discord_id.in_(user_ids)).all()
+            best_profiles = {}
+            
+            for uid in user_ids:
+                u_profs = [p for p in profiles if p.discord_id == uid]
+                exact_matches = [p for p in u_profs if p.build_type == event.game_type]
+                pvx_matches = [p for p in u_profs if p.build_type == "PvX"]
+
+                if exact_matches:
+                    best_profiles[uid] = max(exact_matches, key=lambda p: p.gear_score)
+                elif pvx_matches:
+                    best_profiles[uid] = max(pvx_matches, key=lambda p: p.gear_score)
 
         attending_dict = {}
         absent_players = []
@@ -50,11 +63,12 @@ class AttendanceView(discord.ui.View):
 
         for signup in all_signups:
             mention_tag = f"<@{signup.discord_id}>"
+            user_prof = best_profiles.get(signup.discord_id)
             
-            if signup.user:
-                w1 = WEAPON_EMOJIS.get(signup.user.primary_weapon, "")
-                w2 = WEAPON_EMOJIS.get(signup.user.secondary_weapon, "")
-                s_group = signup.user.static_group or "Unassigned"
+            if user_prof:
+                w1 = WEAPON_EMOJIS.get(user_prof.primary_weapon, "")
+                w2 = WEAPON_EMOJIS.get(user_prof.secondary_weapon, "")
+                s_group = user_prof.static_group or "Unassigned"
                 entry = f"{mention_tag} {w1}{w2}"
             else:
                 s_group = "Unassigned"
@@ -107,7 +121,7 @@ class AttendanceView(discord.ui.View):
 class AttendanceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.bot.add_view(AttendanceView()) # 🟢 REGISTER VIEW GLOBALLY ON STARTUP
+        self.bot.add_view(AttendanceView()) 
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AttendanceCog(bot))

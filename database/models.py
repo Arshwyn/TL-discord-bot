@@ -36,6 +36,10 @@ class GuildEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    
+    # 🟢 NEW: Added the game_type tracker
+    game_type: Mapped[str] = mapped_column(String(20), server_default="PvE")
+    
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     recurrence_days: Mapped[int] = mapped_column(Integer, default=0) 
     requires_rsvp: Mapped[bool] = mapped_column(Boolean, default=True)

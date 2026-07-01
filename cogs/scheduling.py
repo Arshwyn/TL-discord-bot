@@ -7,7 +7,6 @@ import os
 
 from database.db_setup import get_db
 from database.models import GuildEvent, EventAttendance, AttendanceRecord, UserProfile, BotConfig
-from sqlalchemy.orm import joinedload
 from cogs.attendance import AttendanceView
 
 class SchedulingCog(commands.Cog):
@@ -28,6 +27,11 @@ class SchedulingCog(commands.Cog):
         app_commands.Choice(name="Coordinated Universal Time (UTC)", value="UTC"),
     ]
 
+    game_choices = [
+        app_commands.Choice(name="PvE Content", value="PvE"),
+        app_commands.Choice(name="PvP Content", value="PvP")
+    ]
+
     @app_commands.command(name="set_ping_roles", description="Set up to 3 default roles to ping for event reminders")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(role1="Primary role to ping", role2="Second role to ping (Optional)", role3="Third role to ping (Optional)")
@@ -46,7 +50,6 @@ class SchedulingCog(commands.Cog):
             
         await interaction.response.send_message(f"✅ Event reminders will now automatically ping: {mentions_str}", ephemeral=True)
 
-    # 🟢 NEW: View Event Ping Roles
     @app_commands.command(name="view_ping_roles", description="Check which roles are currently configured for event pings")
     @app_commands.default_permissions(manage_guild=True)
     async def view_ping_roles(self, interaction: discord.Interaction):
@@ -61,7 +64,6 @@ class SchedulingCog(commands.Cog):
         mentions = " ".join([f"<@&{rid}>" for rid in role_ids])
         await interaction.response.send_message(f"📢 **Current Event Ping Configurations:**\nWhen an event notification fires, Codex will ping: {mentions}", ephemeral=True)
 
-    # 🟢 NEW: Delete Event Ping Roles
     @app_commands.command(name="delete_ping_roles", description="Reset and remove all configured ping roles")
     @app_commands.default_permissions(manage_guild=True)
     async def delete_ping_roles(self, interaction: discord.Interaction):
@@ -78,6 +80,7 @@ class SchedulingCog(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         name="Event Name (e.g., Archboss Tevent)",
+        game_type="Is this a PvE or PvP event?",
         date_time="Format: YYYY-MM-DD HH:MM (e.g., 2026-07-15 20:00)",
         tz_input="Select your input timezone",
         notify_schedule="Comma-separated minutes before start (e.g., '4320, 60, 5, 0')",
@@ -86,7 +89,7 @@ class SchedulingCog(commands.Cog):
         target_channel="The text channel to post this event in (Defaults to current)",
         voice_channel="The specific Voice Channel to audit for attendance (Optional)"
     )
-    @app_commands.choices(tz_input=tz_choices)
+    @app_commands.choices(tz_input=tz_choices, game_type=game_choices)
     @app_commands.choices(recurrence=[
         app_commands.Choice(name="Does not repeat", value=0),
         app_commands.Choice(name="Weekly", value=7),
@@ -94,7 +97,7 @@ class SchedulingCog(commands.Cog):
     ])
     async def create_event(
         self, interaction: discord.Interaction, name: str, date_time: str, 
-        tz_input: str = "UTC", notify_schedule: str = "0", recurrence: int = 0,
+        game_type: str = "PvE", tz_input: str = "UTC", notify_schedule: str = "0", recurrence: int = 0,
         requires_rsvp: bool = True, target_channel: discord.TextChannel = None, 
         voice_channel: discord.VoiceChannel = None, description: str = None
     ):
@@ -120,7 +123,7 @@ class SchedulingCog(commands.Cog):
 
         with next(get_db()) as db:
             new_event = GuildEvent(
-                name=name, description=description, start_time=utc_dt,
+                name=name, description=description, game_type=game_type, start_time=utc_dt,
                 recurrence_days=recurrence, requires_rsvp=requires_rsvp,
                 notify_schedule=clean_schedule_str, notifies_sent="",
                 channel_id=chosen_channel_id,
@@ -135,7 +138,7 @@ class SchedulingCog(commands.Cog):
         
         await interaction.response.send_message(
             f"✅ **Event Scheduled!** (Posting in <#{chosen_channel_id}>)\n"
-            f"**Event:** {name} `[{'Repeats every ' + str(recurrence) + 'd' if recurrence > 0 else 'One-time'}]`\n"
+            f"**Event:** [{game_type}] {name} `[{'Repeats every ' + str(recurrence) + 'd' if recurrence > 0 else 'One-time'}]`\n"
             f"**Type:** {poll_type}\n**Ping Warnings:** `{clean_schedule_str}` (Minutes prior)"
             f"{vc_target}\n"
             f"**Time:** <t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)",
@@ -144,10 +147,10 @@ class SchedulingCog(commands.Cog):
 
     @app_commands.command(name="edit_event", description="Edit an existing event's details")
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.choices(tz_input=tz_choices)
+    @app_commands.choices(tz_input=tz_choices, game_type=game_choices)
     async def edit_event(
         self, interaction: discord.Interaction, event_id: int, 
-        name: str = None, date_time: str = None, tz_input: str = None, 
+        name: str = None, game_type: str = None, date_time: str = None, tz_input: str = None, 
         description: str = None, voice_channel: discord.VoiceChannel = None
     ):
         if date_time and not tz_input:
@@ -161,6 +164,7 @@ class SchedulingCog(commands.Cog):
                 return
 
             if name: event.name = name
+            if game_type: event.game_type = game_type
             if description: event.description = description
             if voice_channel: event.voice_channel_id = voice_channel.id
             
@@ -183,7 +187,7 @@ class SchedulingCog(commands.Cog):
                     try:
                         msg = await channel.fetch_message(event.message_id)
                         embed = msg.embeds[0]
-                        embed.title = f"⚔️ {event.name}"
+                        embed.title = f"⚔️ [{event.game_type}] {event.name}"
                         embed.description = event.description or ("Sign up using the buttons below." if event.requires_rsvp else "Mark your calendars!")
                         unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
                         embed.set_field_at(0, name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
@@ -208,7 +212,7 @@ class SchedulingCog(commands.Cog):
                     try:
                         msg = await channel.fetch_message(event.message_id)
                         embed = msg.embeds[0]
-                        embed.title = f"🛑 CANCELED: {event.name}"
+                        embed.title = f"🛑 CANCELED: [{event.game_type}] {event.name}"
                         embed.color = discord.Color.red()
                         embed.set_footer(text=f"Event ID: {event.id} | Event has been canceled by an Officer")
                         
@@ -237,7 +241,7 @@ class SchedulingCog(commands.Cog):
         for event in events:
             unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
             chan_tag = f" <#{event.channel_id}>" if event.channel_id else ""
-            report += f"🔹 **ID:** `{event.id}` | **Name:** {event.name}{chan_tag}\n └ *Time:* <t:{unix_ts}:F> (<t:{unix_ts}:R>)\n\n"
+            report += f"🔹 **ID:** `{event.id}` | **Name:** [{event.game_type}] {event.name}{chan_tag}\n └ *Time:* <t:{unix_ts}:F> (<t:{unix_ts}:R>)\n\n"
         await interaction.response.send_message(report, ephemeral=True)
 
     @app_commands.command(name="view_roster", description="View a detailed signup breakdown")
@@ -249,21 +253,38 @@ class SchedulingCog(commands.Cog):
             if not event:
                 await interaction.followup.send(f"❌ Event ID `{event_id}` not found.", ephemeral=True)
                 return
-            records = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event_id).all()
+                
+            records = db.query(EventAttendance).filter_by(event_id=event_id).all()
+            user_ids = [r.discord_id for r in records]
+            
+            # 🟢 NEW: Smart Fallback Logic (Matches exact, falls back to PvX, gets highest GS)
+            profiles = db.query(UserProfile).filter(UserProfile.discord_id.in_(user_ids)).all()
+            best_profiles = {}
+            for uid in user_ids:
+                u_profs = [p for p in profiles if p.discord_id == uid]
+                exact_matches = [p for p in u_profs if p.build_type == event.game_type]
+                pvx_matches = [p for p in u_profs if p.build_type == "PvX"]
+
+                if exact_matches:
+                    best_profiles[uid] = max(exact_matches, key=lambda p: p.gear_score)
+                elif pvx_matches:
+                    best_profiles[uid] = max(pvx_matches, key=lambda p: p.gear_score)
 
         attending_dict = {}
         absent_list, tentative_list = [], []
         total_attending = 0
 
         for record in records:
-            if record.user:
-                name_display = record.user.ingame_name
-                details = f" [⭐ {record.user.gear_score} | {record.user.primary_weapon} / {record.user.secondary_weapon}]"
-                s_group = record.user.static_group or "Unassigned"
+            user_prof = best_profiles.get(record.discord_id)
+            
+            if user_prof:
+                name_display = user_prof.ingame_name
+                details = f" [⭐ {user_prof.gear_score} | {user_prof.primary_weapon} / {user_prof.secondary_weapon}]"
+                s_group = user_prof.static_group or "Unassigned"
             else:
                 member = interaction.guild.get_member(record.discord_id)
                 name_display = member.display_name if member else f"Unregistered User (<@{record.discord_id}>)"
-                details = " *(No Profile)*"
+                details = " *(No Matching Profile)*"
                 s_group = "Unassigned"
 
             entry = f"• **{name_display}**{details}"
@@ -283,7 +304,7 @@ class SchedulingCog(commands.Cog):
             attending_lines.append("")
 
         unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
-        embed = discord.Embed(title=f"📋 Roster Breakdown: {event.name}", description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`", color=discord.Color.blue())
+        embed = discord.Embed(title=f"📋 Roster Breakdown: [{event.game_type}] {event.name}", description=f"**Time:** <t:{unix_ts}:F>\n**Event ID:** `{event.id}`", color=discord.Color.blue())
 
         def safe_join(lst):
             res = "\n".join(lst).strip() if lst else "*No sign-ups*"
@@ -352,7 +373,7 @@ class SchedulingCog(commands.Cog):
                         
                         if not event.is_posted:
                             unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
-                            embed = discord.Embed(title=f"⚔️ {event.name}", color=discord.Color.gold())
+                            embed = discord.Embed(title=f"⚔️ [{event.game_type}] {event.name}", color=discord.Color.gold())
                             embed.add_field(name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
                             if event.requires_rsvp:
                                 embed.add_field(name="✅ Attending (0)", value="`0 players`", inline=True)
@@ -372,7 +393,7 @@ class SchedulingCog(commands.Cog):
                             if event.recurrence_days > 0:
                                 next_time = event.start_time + timedelta(days=event.recurrence_days)
                                 next_event = GuildEvent(
-                                    name=event.name, description=event.description, start_time=next_time,
+                                    name=event.name, description=event.description, game_type=event.game_type, start_time=next_time,
                                     recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
                                     notify_schedule=event.notify_schedule, channel_id=event.channel_id,
                                     voice_channel_id=event.voice_channel_id, 
@@ -383,9 +404,9 @@ class SchedulingCog(commands.Cog):
                             poll_link = f"https://discord.com/channels/{channel.guild.id}/{event.channel_id}/{event.message_id}" if event.message_id else ""
                             link_text = f"\n👉 [Jump to Details]({poll_link})" if poll_link else ""
                             if target_mins == 0:
-                                reminder = f"{ping_text} ⚔️ **{event.name} is starting NOW!**{link_text}"
+                                reminder = f"{ping_text} ⚔️ **[{event.game_type}] {event.name} is starting NOW!**{link_text}"
                             else:
-                                reminder = f"{ping_text} ⏰ **Reminder:** {event.name} starts in **{target_mins} minutes**!{link_text}"
+                                reminder = f"{ping_text} ⏰ **Reminder:** [{event.game_type}] {event.name} starts in **{target_mins} minutes**!{link_text}"
                             await channel.send(reminder)
                         
                         sent.append(target_mins)
@@ -421,13 +442,32 @@ class SchedulingCog(commands.Cog):
                             for member in vc.members:
                                 active_voice_member_ids.add(member.id)
 
-                    signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=event.id).all()
-                    profile_map = {p.discord_id: p for p in db.query(UserProfile).all()}
+                    signups = db.query(EventAttendance).filter_by(event_id=event.id).all()
+                    
+                    # 🟢 NEW: Apply Exact > PvX > Highest GS logic globally to the Auditor
+                    user_ids = {s.discord_id for s in signups}
+                    user_ids.update(active_voice_member_ids)
+                    
+                    profiles = db.query(UserProfile).filter(UserProfile.discord_id.in_(user_ids)).all()
+                    best_profiles = {}
+                    
+                    for uid in user_ids:
+                        u_profs = [p for p in profiles if p.discord_id == uid]
+                        exact_matches = [p for p in u_profs if p.build_type == event.game_type]
+                        pvx_matches = [p for p in u_profs if p.build_type == "PvX"]
+
+                        if exact_matches:
+                            best_profiles[uid] = max(exact_matches, key=lambda p: p.gear_score)
+                        elif pvx_matches:
+                            best_profiles[uid] = max(pvx_matches, key=lambda p: p.gear_score)
+                            
                     audited_user_ids = set()
 
                     for signup in signups:
                         audited_user_ids.add(signup.discord_id)
-                        ign = signup.user.ingame_name if signup.user else f"Discord User ID: {signup.discord_id}"
+                        user_prof = best_profiles.get(signup.discord_id)
+                        
+                        ign = user_prof.ingame_name if user_prof else f"Discord User ID: {signup.discord_id}"
                         presence = "Ghosted"
                         if signup.status == "attending" and signup.discord_id in active_voice_member_ids:
                             presence = "Present"
@@ -443,7 +483,7 @@ class SchedulingCog(commands.Cog):
 
                     for active_id in active_voice_member_ids:
                         if active_id not in audited_user_ids:
-                            user_prof = profile_map.get(active_id)
+                            user_prof = best_profiles.get(active_id)
                             ign = user_prof.ingame_name if user_prof else f"Discord User ID: {active_id}"
                             record = AttendanceRecord(
                                 event_id=event.id, event_name=event.name, event_date=event.start_time,
