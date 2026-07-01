@@ -188,7 +188,17 @@ class SchedulingCog(commands.Cog):
                         msg = await channel.fetch_message(event.message_id)
                         embed = msg.embeds[0]
                         embed.title = f"⚔️ [{event.game_type}] {event.name}"
-                        embed.description = event.description or ("Sign up using the buttons below." if event.requires_rsvp else "Mark your calendars!")
+                        
+                        # Rebuild description with VC
+                        desc_text = f"{event.description}\n\n" if event.description else ""
+                        
+                        # Only add the Voice Channel line if one was actually selected
+                        if event.voice_channel_id:
+                            desc_text += f"🔊 **Voice Channel:** <#{event.voice_channel_id}>\n"
+                            
+                        desc_text += "\n*Sign up using the buttons below.*" if event.requires_rsvp else "\n*Mark your calendars!*"
+                        
+                        embed.description = desc_text.strip()
                         unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
                         embed.set_field_at(0, name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
                         await msg.edit(embed=embed)
@@ -399,7 +409,21 @@ class SchedulingCog(commands.Cog):
                         
                         if not event.is_posted:
                             unix_ts = int(event.start_time.replace(tzinfo=timezone.utc).timestamp())
-                            embed = discord.Embed(title=f"⚔️ [{event.game_type}] {event.name}", color=discord.Color.gold())
+                            
+                            # Build the description and voice channel info
+                            desc_text = f"{event.description}\n\n" if event.description else ""
+                            
+                            # Only add the Voice Channel line if one was actually selected
+                            if event.voice_channel_id:
+                                desc_text += f"🔊 **Voice Channel:** <#{event.voice_channel_id}>\n"
+                                
+                            desc_text += "\n*Sign up using the buttons below.*" if event.requires_rsvp else "\n*Mark your calendars!*"
+
+                            embed = discord.Embed(
+                                title=f"⚔️ [{event.game_type}] {event.name}", 
+                                description=desc_text.strip(),
+                                color=discord.Color.gold()
+                            )
                             embed.add_field(name="📅 Target Time", value=f"<t:{unix_ts}:F>\n(<t:{unix_ts}:R>)", inline=False)
                             if event.requires_rsvp:
                                 embed.add_field(name="✅ Attending (0)", value="`0 players`", inline=True)
