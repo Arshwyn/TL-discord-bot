@@ -148,10 +148,12 @@ class SchedulingCog(commands.Cog):
     @app_commands.command(name="edit_event", description="Edit an existing event's details")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.choices(tz_input=tz_choices, game_type=game_choices)
+    @app_commands.describe(this_occurrence_only="Set to True to edit ONLY this specific event, leaving future repeats unchanged.")
     async def edit_event(
         self, interaction: discord.Interaction, event_id: int, 
         name: str = None, game_type: str = None, date_time: str = None, tz_input: str = None, 
-        description: str = None, voice_channel: discord.VoiceChannel = None
+        description: str = None, voice_channel: discord.VoiceChannel = None,
+        this_occurrence_only: bool = False
     ):
         if date_time and not tz_input:
             await interaction.response.send_message("❌ **Timezone is required** when updating the Date/Time.", ephemeral=True)
@@ -162,6 +164,22 @@ class SchedulingCog(commands.Cog):
             if not event or event.is_completed:
                 await interaction.response.send_message("❌ Event not found or already completed.", ephemeral=True)
                 return
+
+            # 🟢 NEW: Separate this instance from the recurrence chain if requested
+            if this_occurrence_only and event.recurrence_days > 0:
+                # Spawn the next event early using the original, unedited properties
+                next_time = event.start_time + timedelta(days=event.recurrence_days)
+                next_event = GuildEvent(
+                    name=event.name, description=event.description, game_type=event.game_type, start_time=next_time,
+                    recurrence_days=event.recurrence_days, requires_rsvp=event.requires_rsvp,
+                    notify_schedule=event.notify_schedule, channel_id=event.channel_id,
+                    voice_channel_id=event.voice_channel_id, 
+                    notifies_sent="", is_posted=False, is_completed=False
+                )
+                db.add(next_event)
+                
+                # Sever the current event from the chain so it doesn't spawn another one later
+                event.recurrence_days = 0
 
             if name: event.name = name
             if game_type: event.game_type = game_type
@@ -205,7 +223,8 @@ class SchedulingCog(commands.Cog):
                     except discord.NotFound:
                         pass
 
-        await interaction.response.send_message(f"✅ Event `{event_id}` updated.", ephemeral=True)
+        msg_tail = " *(This occurrence only!)*" if this_occurrence_only else ""
+        await interaction.response.send_message(f"✅ Event `{event_id}` updated.{msg_tail}", ephemeral=True)
 
     @app_commands.command(name="delete_event", description="Cancel and delete an event")
     @app_commands.default_permissions(manage_guild=True)
