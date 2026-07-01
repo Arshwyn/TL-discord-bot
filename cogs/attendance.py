@@ -12,7 +12,8 @@ WEAPON_EMOJIS = {
 }
 
 class AttendanceView(discord.ui.View):
-    def __init__(self, event_id: int):
+    # 🟢 ALLOW EVENT ID TO BE NONE FOR PERSISTENT RELOADS
+    def __init__(self, event_id: int = None):
         super().__init__(timeout=None)
         self.event_id = event_id
 
@@ -20,22 +21,28 @@ class AttendanceView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         with next(get_db()) as db:
-            event = db.query(GuildEvent).filter_by(id=self.event_id).first()
+            # 🟢 PERSISTENCY CHECK: If memory was wiped, find the event by the Message ID
+            current_event_id = self.event_id
+            if not current_event_id:
+                event_record = db.query(GuildEvent).filter_by(message_id=interaction.message.id).first()
+                if event_record:
+                    current_event_id = event_record.id
+
+            event = db.query(GuildEvent).filter_by(id=current_event_id).first()
             if not event or event.is_completed:
-                await interaction.followup.send("⛔ **This event has already concluded.**", ephemeral=True)
+                await interaction.followup.send("⛔ **This event has already concluded or cannot be found.**", ephemeral=True)
                 return
 
-            attendance = db.query(EventAttendance).filter_by(event_id=self.event_id, discord_id=interaction.user.id).first()
+            attendance = db.query(EventAttendance).filter_by(event_id=current_event_id, discord_id=interaction.user.id).first()
             if attendance:
                 attendance.status = status
             else:
-                attendance = EventAttendance(event_id=self.event_id, discord_id=interaction.user.id, status=status)
+                attendance = EventAttendance(event_id=current_event_id, discord_id=interaction.user.id, status=status)
                 db.add(attendance)
             db.commit()
 
-            all_signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=self.event_id).all()
+            all_signups = db.query(EventAttendance).options(joinedload(EventAttendance.user)).filter_by(event_id=current_event_id).all()
 
-        # Group 'Attending' members into a dictionary based on their Static Group
         attending_dict = {}
         absent_players = []
         tentative_players = []
@@ -63,16 +70,14 @@ class AttendanceView(discord.ui.View):
             elif signup.status == "tentative":
                 tentative_players.append(entry)
 
-        # Build the final sorted string for the Attending field
         attending_lines = []
-        # Sort keys so named Statics are alphabetical, but "Unassigned" is always at the bottom
         sorted_groups = sorted(attending_dict.keys(), key=lambda x: (x == "Unassigned", x))
         
         for group in sorted_groups:
             attending_lines.append(f"**🛡️ {group}**")
             for player in attending_dict[group]:
                 attending_lines.append(player)
-            attending_lines.append("") # Adds a blank line between statics
+            attending_lines.append("") 
 
         def safe_join(player_list, default_text="`0 players`"):
             res = "\n".join(player_list).strip() if player_list else default_text
@@ -102,6 +107,7 @@ class AttendanceView(discord.ui.View):
 class AttendanceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.bot.add_view(AttendanceView()) # 🟢 REGISTER VIEW GLOBALLY ON STARTUP
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AttendanceCog(bot))
