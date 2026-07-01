@@ -334,10 +334,16 @@ class SchedulingCog(commands.Cog):
             elif log.actual_presence == "Ghosted": ghosted.append(display)
             elif log.actual_presence == "Unregistered": unregistered.append(display)
 
+        # Helper function to prevent Discord API 400 Bad Request errors (1024 char limit per field)
+        def safe_join(lst):
+            res = "\n".join(lst).strip() if lst else "*None*"
+            return res[:1000] + "\n...*(Too many)*" if len(res) > 1024 else res
+
         embed = discord.Embed(title=f"📜 Presence Audit Ledger: {logs[0].event_name}", color=discord.Color.brand_green())
-        embed.add_field(name=f"✅ Present in Comms Voice ({len(present)})", value="\n".join(present) if present else "*None*", inline=False)
-        embed.add_field(name=f"👻 Ghosted Signed-Up Users ({len(ghosted)})", value="\n".join(ghosted) if ghosted else "*None*", inline=False)
-        embed.add_field(name=f"⚠️ Unregistered Raiders in VC ({len(unregistered)})", value="\n".join(unregistered) if unregistered else "*None*", inline=False)
+        embed.add_field(name=f"✅ Present ({len(present)})", value=safe_join(present), inline=False)
+        embed.add_field(name=f"👻 Ghosted ({len(ghosted)})", value=safe_join(ghosted), inline=False)
+        embed.add_field(name=f"⚠️ Unregistered ({len(unregistered)})", value=safe_join(unregistered), inline=False)
+        
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @tasks.loop(seconds=15)
