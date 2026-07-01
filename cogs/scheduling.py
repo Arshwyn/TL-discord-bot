@@ -329,7 +329,12 @@ class SchedulingCog(commands.Cog):
 
         present, ghosted, unregistered = [], [], []
         for log in logs:
-            display = f"• {log.ingame_name} (<@{log.discord_id}>)"
+            # Check if they have the ugly fallback name from the database
+            if log.ingame_name.startswith("Discord User ID:"):
+                display = f"• <@{log.discord_id}>"
+            else:
+                display = f"• {log.ingame_name} (<@{log.discord_id}>)"
+                
             if log.actual_presence == "Present": present.append(display)
             elif log.actual_presence == "Ghosted": ghosted.append(display)
             elif log.actual_presence == "Unregistered": unregistered.append(display)
@@ -459,6 +464,9 @@ class SchedulingCog(commands.Cog):
                     
                     for uid in user_ids:
                         u_profs = [p for p in profiles if p.discord_id == uid]
+                        if not u_profs:
+                            continue
+                            
                         exact_matches = [p for p in u_profs if p.build_type == event.game_type]
                         pvx_matches = [p for p in u_profs if p.build_type == "PvX"]
 
@@ -466,14 +474,18 @@ class SchedulingCog(commands.Cog):
                             best_profiles[uid] = max(exact_matches, key=lambda p: p.gear_score)
                         elif pvx_matches:
                             best_profiles[uid] = max(pvx_matches, key=lambda p: p.gear_score)
+                        else:
+                            # 🟢 Fallback to ANY profile they have just to get their name
+                            best_profiles[uid] = max(u_profs, key=lambda p: p.gear_score)
                             
                     audited_user_ids = set()
 
                     for signup in signups:
                         audited_user_ids.add(signup.discord_id)
                         user_prof = best_profiles.get(signup.discord_id)
-                        
-                        ign = user_prof.ingame_name if user_prof else f"Discord User ID: {signup.discord_id}"
+
+                        member = channel.guild.get_member(signup.discord_id)
+                        ign = user_prof.ingame_name if user_prof else (member.display_name if member else "Unregistered")
                         presence = "Ghosted"
                         if signup.status == "attending" and signup.discord_id in active_voice_member_ids:
                             presence = "Present"
@@ -490,7 +502,8 @@ class SchedulingCog(commands.Cog):
                     for active_id in active_voice_member_ids:
                         if active_id not in audited_user_ids:
                             user_prof = best_profiles.get(active_id)
-                            ign = user_prof.ingame_name if user_prof else f"Discord User ID: {active_id}"
+                            member = channel.guild.get_member(active_id)
+                            ign = user_prof.ingame_name if user_prof else (member.display_name if member else "Unregistered")
                             record = AttendanceRecord(
                                 event_id=event.id, event_name=event.name, event_date=event.start_time,
                                 discord_id=active_id, ingame_name=ign, signup_status="none",
