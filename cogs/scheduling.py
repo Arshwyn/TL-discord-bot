@@ -593,7 +593,7 @@ class SchedulingCog(commands.Cog):
         for idx, user in enumerate(leaderboard[:25], 1): 
             lines.append(
                 f"**{idx}.** <@{user['uid']}> (`{user['name']}`) — **{user['pct']:.1f}%** ({user['present']}/{user['total']}) "
-                f"| 👻 {user['ghosted']} Ghosted | ⚠️ {user['unregistered']} Unregistered"
+                f"| {user['ghosted']} Ghosted | {user['unregistered']} Unregistered"
             )
             
         embed = discord.Embed(
