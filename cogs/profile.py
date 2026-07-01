@@ -32,7 +32,8 @@ class ProfileCog(commands.Cog):
 
     BUILD_CHOICES = [
         app_commands.Choice(name="PvE Content", value="PvE"),
-        app_commands.Choice(name="PvP Content", value="PvP")
+        app_commands.Choice(name="PvP Content", value="PvP"),
+        app_commands.Choice(name="PvX (Both)", value="PvX")
     ]
 
     async def update_build_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -41,7 +42,7 @@ class ProfileCog(commands.Cog):
             return [
                 app_commands.Choice(name=p.build_name, value=p.build_name)
                 for p in profiles if current.lower() in p.build_name.lower()
-            ][:25]
+            ][:25] 
 
     async def view_build_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         target_id = interaction.namespace.member or interaction.user.id
@@ -54,8 +55,8 @@ class ProfileCog(commands.Cog):
 
     @profile_group.command(name="setup", description="Create a new specific build loadout")
     @app_commands.describe(
-        build_name="Name this build (e.g., 'Main Boss DPS', 'GvG Tank')",
-        build_type="Is this build optimized for PvE or PvP?",
+        build_name="Name this build (e.g., 'Main Build', 'GvG Tank')",
+        build_type="Is this build optimized for PvE, PvP, or PvX?",
         ingame_name="In-game name (Synchronizes across all your builds)", 
         primary_weapon="Main weapon", 
         secondary_weapon="Off-hand weapon", 
@@ -112,7 +113,7 @@ class ProfileCog(commands.Cog):
         ingame_name="Update your name across all your builds if you used a name change ticket",
         primary_weapon="Change your main weapon selection",
         secondary_weapon="Change your off-hand weapon selection",
-        build_type="Change the tag (PvE/PvP) for this build",
+        build_type="Change the tag (PvE/PvP/PvX) for this build",
         screenshot="Upload a new screenshot to verify your gear modifications"
     )
     @app_commands.choices(primary_weapon=WEAPON_CHOICES, secondary_weapon=WEAPON_CHOICES, build_type=BUILD_CHOICES)
@@ -220,10 +221,18 @@ class ProfileCog(commands.Cog):
         w2 = WEAPON_EMOJIS.get(profile.secondary_weapon, "")
         static_tag = f"\n🛡️ **Static:** {profile.static_group}" if profile.static_group else ""
 
+        # 🟢 Match Colors dynamically
+        if profile.build_type == "PvE":
+            card_color = discord.Color.purple()
+        elif profile.build_type == "PvP":
+            card_color = discord.Color.red()
+        else:
+            card_color = discord.Color.gold()
+
         embed = discord.Embed(
             title=f"👤 Profile: {profile.ingame_name} | {profile.build_name}", 
             description=f"Type: **{profile.build_type}**{static_tag}", 
-            color=discord.Color.purple() if profile.build_type == "PvE" else discord.Color.red()
+            color=card_color
         )
         embed.add_field(name="Discord Account", value=target.mention, inline=False)
         embed.add_field(name="⚔️ Active Loadout", value=f"{w1} {profile.primary_weapon} / {w2} {profile.secondary_weapon}", inline=True)
@@ -235,14 +244,12 @@ class ProfileCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    # 🟢 MODIFIED: Unified directory command
     @profile_group.command(name="directory", description="View a unified list of all registered guild builds")
     @app_commands.default_permissions(manage_guild=True) 
     async def directory(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
         with next(get_db()) as db:
-            # Pull all profiles sorted entirely by gear score globally
             profiles = db.query(UserProfile).order_by(UserProfile.gear_score.desc()).all()
 
         if not profiles:
@@ -251,6 +258,7 @@ class ProfileCog(commands.Cog):
 
         pve_lines = []
         pvp_lines = []
+        pvx_lines = []
 
         for p in profiles:
             w1 = WEAPON_EMOJIS.get(p.primary_weapon, "")
@@ -263,8 +271,10 @@ class ProfileCog(commands.Cog):
             # Segregate them internally for cleanly formatting the embed
             if p.build_type == "PvE":
                 pve_lines.append(line_str)
-            else:
+            elif p.build_type == "PvP":
                 pvp_lines.append(line_str)
+            else:
+                pvx_lines.append(line_str)
 
         embeds = []
         current_desc = ""
@@ -281,7 +291,7 @@ class ProfileCog(commands.Cog):
                     current_desc = "**🟢 PvE Configurations (Cont.)**\n" + line + "\n"
                 else:
                     current_desc += line + "\n"
-            current_desc += "\n" # Spacing between lists
+            current_desc += "\n" 
 
         if pvp_lines:
             header = "**🔴 PvP Configurations**\n"
@@ -297,10 +307,25 @@ class ProfileCog(commands.Cog):
                     current_desc = "**🔴 PvP Configurations (Cont.)**\n" + line + "\n"
                 else:
                     current_desc += line + "\n"
+            current_desc += "\n" 
+
+        if pvx_lines:
+            header = "**🟡 PvX Configurations**\n"
+            if len(current_desc) + len(header) > 3900:
+                flush_embed(current_desc)
+                current_desc = header
+            else:
+                current_desc += header
+
+            for line in pvx_lines:
+                if len(current_desc) + len(line) > 3900:
+                    flush_embed(current_desc)
+                    current_desc = "**🟡 PvX Configurations (Cont.)**\n" + line + "\n"
+                else:
+                    current_desc += line + "\n"
 
         flush_embed(current_desc)
 
-        # Loop through pages of embeds just in case the guild directory exceeds Discord limits
         for i in range(0, len(embeds), 10):
             await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
 
@@ -339,9 +364,6 @@ class ProfileCog(commands.Cog):
         else:
             await interaction.followup.send("✅ **Scan Complete:** All registered profiles match active members currently inside the server. Zero ghosts found!", ephemeral=True)
 
-    # ==========================================
-    # STATIC MANAGEMENT COMMANDS
-    # ==========================================
     @static_group.command(name="assign", description="Assign a user to a specific Static Party")
     @app_commands.default_permissions(manage_guild=True)
     async def static_assign(self, interaction: discord.Interaction, member: discord.Member, group_name: str):
@@ -372,7 +394,7 @@ class ProfileCog(commands.Cog):
 
     @static_group.command(name="list", description="View static rosters based on build target selection")
     @app_commands.choices(build_type=BUILD_CHOICES)
-    @app_commands.describe(group_name="Optional filter for specific group name", build_type="Filter by PvE or PvP configuration (Defaults to PvE)")
+    @app_commands.describe(group_name="Optional filter for specific group name", build_type="Filter by PvE, PvP, or PvX (Defaults to PvE)")
     async def static_list(self, interaction: discord.Interaction, group_name: str = None, build_type: str = "PvE"):
         await interaction.response.defer(ephemeral=False)
 
@@ -407,10 +429,17 @@ class ProfileCog(commands.Cog):
             desc = "\n".join(lines)
             if len(desc) > 4096: desc = desc[:4090] + "..."
 
+            if build_type == "PvE":
+                card_color = discord.Color.gold()
+            elif build_type == "PvP":
+                card_color = discord.Color.dark_red()
+            else:
+                card_color = discord.Color.green()
+
             embed = discord.Embed(
                 title=f"🛡️ Static Party Layout: {static_name} ({build_type})",
                 description=desc,
-                color=discord.Color.gold() if build_type == "PvE" else discord.Color.dark_red()
+                color=card_color
             )
             embed.set_footer(text=f"Total Builds: {len(members)} | Average GS: {avg_gs}")
             embeds.append(embed)
@@ -420,7 +449,6 @@ class ProfileCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        """Automatically prunes database profiles when a user leaves the server."""
         with next(get_db()) as db:
             profiles = db.query(UserProfile).filter_by(discord_id=member.id).all()
             if profiles:

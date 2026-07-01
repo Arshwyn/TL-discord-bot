@@ -14,11 +14,11 @@ class SchedulingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_events_loop.start()
-        self.cleanup_attendance_loop.start() # 🟢 NEW: Start attendance cleaner
+        self.cleanup_attendance_loop.start() 
 
     def cog_unload(self):
         self.check_events_loop.cancel()
-        self.cleanup_attendance_loop.cancel() # 🟢 NEW: Cancel attendance cleaner
+        self.cleanup_attendance_loop.cancel() 
 
     tz_choices = [
         app_commands.Choice(name="Eastern Time (EST/EDT)", value="US/Eastern"),
@@ -28,12 +28,10 @@ class SchedulingCog(commands.Cog):
         app_commands.Choice(name="Coordinated Universal Time (UTC)", value="UTC"),
     ]
 
-    # 🟢 NEW: Supports up to 3 roles for event pings
     @app_commands.command(name="set_ping_roles", description="Set up to 3 default roles to ping for event reminders")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(role1="Primary role to ping", role2="Second role to ping (Optional)", role3="Third role to ping (Optional)")
     async def set_ping_roles(self, interaction: discord.Interaction, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None):
-        # Bundle the provided roles, filtering out empty ones
         roles = [r for r in (role1, role2, role3) if r is not None]
         role_ids_str = ",".join(str(r.id) for r in roles)
         mentions_str = " ".join(r.mention for r in roles)
@@ -47,6 +45,34 @@ class SchedulingCog(commands.Cog):
             db.commit()
             
         await interaction.response.send_message(f"✅ Event reminders will now automatically ping: {mentions_str}", ephemeral=True)
+
+    # 🟢 NEW: View Event Ping Roles
+    @app_commands.command(name="view_ping_roles", description="Check which roles are currently configured for event pings")
+    @app_commands.default_permissions(manage_guild=True)
+    async def view_ping_roles(self, interaction: discord.Interaction):
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="ping_role_ids").first()
+
+        if not cfg or not cfg.setting_value:
+            await interaction.response.send_message("ℹ️ No ping roles are configured. The bot is currently defaulting to `@here`.", ephemeral=True)
+            return
+
+        role_ids = cfg.setting_value.split(",")
+        mentions = " ".join([f"<@&{rid}>" for rid in role_ids])
+        await interaction.response.send_message(f"📢 **Current Event Ping Configurations:**\nWhen an event notification fires, Codex will ping: {mentions}", ephemeral=True)
+
+    # 🟢 NEW: Delete Event Ping Roles
+    @app_commands.command(name="delete_ping_roles", description="Reset and remove all configured ping roles")
+    @app_commands.default_permissions(manage_guild=True)
+    async def delete_ping_roles(self, interaction: discord.Interaction):
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="ping_role_ids").first()
+            if cfg:
+                db.delete(cfg)
+                db.commit()
+                await interaction.response.send_message("🗑️ **Ping roles reset!** The bot will now default to `@here`.", ephemeral=True)
+            else:
+                await interaction.response.send_message("ℹ️ No ping roles were configured.", ephemeral=True)
 
     @app_commands.command(name="create_event", description="Schedule a guild event")
     @app_commands.default_permissions(manage_guild=True)
@@ -299,13 +325,11 @@ class SchedulingCog(commands.Cog):
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         with next(get_db()) as db:
-            # 🟢 NEW: Pull all roles and dynamically compile them into the ping text!
             cfg = db.query(BotConfig).filter_by(setting_key="ping_role_ids").first()
             if not cfg:
-                # Fallback check for the old singular key just in case
                 cfg = db.query(BotConfig).filter_by(setting_key="ping_role_id").first()
                 
-            ping_text = "@here" # Failsafe
+            ping_text = "@here"
             if cfg and cfg.setting_value:
                 role_ids = cfg.setting_value.split(",")
                 ping_text = " ".join([f"<@&{rid}>" for rid in role_ids])
@@ -497,7 +521,6 @@ class SchedulingCog(commands.Cog):
         cutoff_date = now - timedelta(days=14)
         
         with next(get_db()) as db:
-            # Find all completed events that finished more than 14 days ago
             old_completed_events = db.query(GuildEvent).filter(
                 GuildEvent.is_completed == True,
                 GuildEvent.start_time <= cutoff_date
@@ -506,7 +529,6 @@ class SchedulingCog(commands.Cog):
             if old_completed_events:
                 event_ids = [e.id for e in old_completed_events]
                 
-                # Delete the signups matching those event IDs
                 deleted_rows = db.query(EventAttendance).filter(
                     EventAttendance.event_id.in_(event_ids)
                 ).delete(synchronize_session=False)
