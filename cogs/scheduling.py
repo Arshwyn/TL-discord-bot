@@ -538,6 +538,80 @@ class SchedulingCog(commands.Cog):
         with next(get_db()) as db:
             records = db.query(AttendanceRecord).filter(AttendanceRecord.event_date >= cutoff).all()
             
+            if not records:
+                await interaction.followup.send("📭 No attendance records found in the last 30 days.")
+                return
+                
+            # 🟢 Grab all LIVE profiles to override old snapshot data
+            user_ids = list(set(r.discord_id for r in records))
+            profiles = db.query(UserProfile).filter(UserProfile.discord_id.in_(user_ids)).all()
+            
+        stats = {}
+        for r in records:
+            if r.discord_id not in stats:
+                # 1. Try to get their LIVE In-Game Name
+                user_profs = [p for p in profiles if p.discord_id == r.discord_id]
+                if user_profs:
+                    ign = user_profs[0].ingame_name
+                else:
+                    # 2. Fallback to Server Nickname if no profile exists
+                    member = interaction.guild.get_member(r.discord_id)
+                    if member:
+                        ign = member.display_name
+                    else:
+                        # 3. Fallback to Discord Username if they left the server completely
+                        user = self.bot.get_user(r.discord_id)
+                        ign = user.name if user else "Unknown User"
+                        
+                stats[r.discord_id] = {"name": ign, "present": 0, "ghosted": 0, "unregistered": 0, "total": 0}
+            
+            stats[r.discord_id]["total"] += 1
+            
+            if r.actual_presence == "Present":
+                stats[r.discord_id]["present"] += 1
+            elif r.actual_presence == "Ghosted":
+                stats[r.discord_id]["ghosted"] += 1
+            elif r.actual_presence == "Unregistered":
+                stats[r.discord_id]["unregistered"] += 1
+                
+        leaderboard = []
+        for uid, data in stats.items():
+            pct = (data["present"] / data["total"]) * 100 if data["total"] > 0 else 0
+            leaderboard.append({
+                "uid": uid,
+                "name": data["name"],
+                "present": data["present"],
+                "ghosted": data["ghosted"],
+                "unregistered": data["unregistered"],
+                "total": data["total"],
+                "pct": pct
+            })
+            
+        leaderboard.sort(key=lambda x: (x["pct"], x["present"]), reverse=True)
+        
+        lines = []
+        for idx, user in enumerate(leaderboard[:25], 1): 
+            lines.append(
+                f"**{idx}.** <@{user['uid']}> (`{user['name']}`) — **{user['pct']:.1f}%** ({user['present']}/{user['total']}) "
+                f"| 👻 {user['ghosted']} Ghosted | ⚠️ {user['unregistered']} Unregistered"
+            )
+            
+        embed = discord.Embed(
+            title="🏆 30-Day Attendance Leaderboard",
+            description="\n".join(lines) if lines else "*No data*",
+            color=discord.Color.brand_green()
+        )
+        embed.set_footer(text="Data compiled from automated voice channel audits. Unregistered appearances penalize score.")
+        
+        await interaction.followup.send(embed=embed)
+        await interaction.response.defer(ephemeral=False)
+        
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = now - timedelta(days=30)
+        
+        with next(get_db()) as db:
+            records = db.query(AttendanceRecord).filter(AttendanceRecord.event_date >= cutoff).all()
+            
         if not records:
             await interaction.followup.send("📭 No attendance records found in the last 30 days.")
             return
