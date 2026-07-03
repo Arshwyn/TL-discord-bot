@@ -62,17 +62,18 @@ class AttendanceView(discord.ui.View):
         total_attending = 0
 
         for signup in all_signups:
-            mention_tag = f"<@{signup.discord_id}>"
             user_prof = best_profiles.get(signup.discord_id)
             
             if user_prof:
                 w1 = WEAPON_EMOJIS.get(user_prof.primary_weapon, "")
                 w2 = WEAPON_EMOJIS.get(user_prof.secondary_weapon, "")
                 s_group = user_prof.static_group or "Unassigned"
-                entry = f"{mention_tag} {w1}{w2}"
+                entry = f"• {user_prof.ingame_name} {w1}{w2}"
             else:
                 s_group = "Unassigned"
-                entry = f"{mention_tag}"
+                member = interaction.guild.get_member(signup.discord_id)
+                name = member.display_name if member else f"User {signup.discord_id}"
+                entry = f"• {name}"
 
             if signup.status == "attending":
                 if s_group not in attending_dict:
