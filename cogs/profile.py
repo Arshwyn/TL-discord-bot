@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from database.db_setup import get_db
-from database.models import UserProfile
+from database.models import UserProfile, EventAttendance
 
 WEAPON_EMOJIS = {
     "Greatsword": "🗡️", "Sword and Shield": "🛡️", "Dagger": "🔪", 
@@ -462,6 +462,8 @@ class ProfileCog(commands.Cog):
 
                 member = interaction.guild.get_member(profile.discord_id)
                 if not member:
+                    db.query(EventAttendance).filter_by(discord_id=profile.discord_id).delete()
+                    
                     ghost_builds = db.query(UserProfile).filter_by(discord_id=profile.discord_id).all()
                     for b in ghost_builds:
                         db.delete(b)
@@ -561,12 +563,15 @@ class ProfileCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         with next(get_db()) as db:
+            db.query(EventAttendance).filter_by(discord_id=member.id).delete()
+            
             profiles = db.query(UserProfile).filter_by(discord_id=member.id).all()
             if profiles:
                 for p in profiles:
                     db.delete(p)
-                db.commit()
-                print(f"🗑️ Automated Prune: Removed all build profiles for {member.display_name} ({member.id}) because they left the server.")
+            
+            db.commit()
+            print(f"🗑️ Automated Prune: Removed all build profiles and signups for {member.display_name} ({member.id}) because they left the server.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ProfileCog(bot))

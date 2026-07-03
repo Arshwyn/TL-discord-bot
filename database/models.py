@@ -21,13 +21,12 @@ class UserProfile(Base):
     
     loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
     
-    # 🛡️ FIXED: Added primaryjoin mapping on the parent side here
     attendance = relationship(
         "EventAttendance", 
         primaryjoin="UserProfile.discord_id==EventAttendance.discord_id",
         foreign_keys="[EventAttendance.discord_id]",
         back_populates="user", 
-        cascade="all, delete-orphan"
+        viewonly=True
     )
 
 class GuildEvent(Base):
