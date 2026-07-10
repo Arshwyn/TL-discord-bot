@@ -90,9 +90,16 @@ class LootItem(Base):
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False) 
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     winner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     rolls = relationship("LootRoll", back_populates="item", cascade="all, delete-orphan")
+
+    # 🟢 NEW: Lazily-created officer management thread + lifecycle tracking
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    manage_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    winner_penalized: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
 class LootRoll(Base):
     __tablename__ = "loot_rolls"
