@@ -301,7 +301,7 @@ class SchedulingCog(commands.Cog):
                     best_profiles[uid] = max(pvx_matches, key=lambda p: p.gear_score)
 
         attending_dict = {}
-        absent_list, tentative_list = [], []
+        absent_list = []
         total_attending = 0
 
         for record in records:
@@ -324,7 +324,6 @@ class SchedulingCog(commands.Cog):
                 attending_dict[s_group].append(entry)
                 total_attending += 1
             elif record.status == "absent": absent_list.append(entry)
-            elif record.status == "tentative": tentative_list.append(entry)
 
         attending_lines = []
         sorted_groups = sorted(attending_dict.keys(), key=lambda x: (x == "Unassigned", x))
@@ -341,7 +340,6 @@ class SchedulingCog(commands.Cog):
             return res[:1000] + "\n..." if len(res) > 1024 else res
 
         embed.add_field(name=f"✅ Attending ({total_attending})", value=safe_join(attending_lines), inline=False)
-        embed.add_field(name=f"⏳ Tentative ({len(tentative_list)})", value=safe_join(tentative_list), inline=False)
         embed.add_field(name=f"⛔ Not Attending ({len(absent_list)})", value=safe_join(absent_list), inline=False)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -448,7 +446,6 @@ class SchedulingCog(commands.Cog):
                             if event.requires_rsvp:
                                 embed.add_field(name="✅ Attending (0)", value="`0 players`", inline=True)
                                 embed.add_field(name="⛔ Not Attending (0)", value="`0 players`", inline=True)
-                                embed.add_field(name="⏳ Tentative (0)", value="`0 players`", inline=True)
                             embed.set_footer(text=f"Event ID: {event.id}")
 
                             if event.requires_rsvp:

@@ -58,7 +58,6 @@ class AttendanceView(discord.ui.View):
 
         attending_dict = {}
         absent_players = []
-        tentative_players = []
         total_attending = 0
 
         for signup in all_signups:
@@ -82,8 +81,6 @@ class AttendanceView(discord.ui.View):
                 total_attending += 1
             elif signup.status == "absent":
                 absent_players.append(entry)
-            elif signup.status == "tentative":
-                tentative_players.append(entry)
 
         attending_lines = []
         sorted_groups = sorted(attending_dict.keys(), key=lambda x: (x == "Unassigned", x))
@@ -101,8 +98,7 @@ class AttendanceView(discord.ui.View):
         embed = interaction.message.embeds[0]
         embed.set_field_at(1, name=f"✅ Attending ({total_attending})", value=safe_join(attending_lines), inline=True)
         embed.set_field_at(2, name=f"⛔ Not Attending ({len(absent_players)})", value=safe_join(absent_players), inline=True)
-        embed.set_field_at(3, name=f"⏳ Tentative ({len(tentative_players)})", value=safe_join(tentative_players), inline=True)
-        
+
         await interaction.message.edit(embed=embed)
         display_status = "Not Attending" if status == "absent" else status.capitalize()
         await interaction.followup.send(f"Your RSVP has been recorded as **{display_status}**.", ephemeral=True)
@@ -114,10 +110,6 @@ class AttendanceView(discord.ui.View):
     @discord.ui.button(label="Not Attending", emoji="⛔", style=discord.ButtonStyle.red, custom_id="btn_absent")
     async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "absent")
-
-    @discord.ui.button(label="Tentative", emoji="⏳", style=discord.ButtonStyle.blurple, custom_id="btn_tentative")
-    async def tentative(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rsvp(interaction, "tentative")
 
 class AttendanceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
