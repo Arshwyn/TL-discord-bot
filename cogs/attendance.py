@@ -11,6 +11,14 @@ WEAPON_EMOJIS = {
     "Wand and Tome": "📘", "Spear": "🔱", "Orb": "🔮", "Gauntlets": "🥊"
 }
 
+def strip_tentative_field(embed: discord.Embed) -> discord.Embed:
+    """Drop the legacy 'Tentative' field left over on messages posted before that option was removed."""
+    for i, field in enumerate(embed.fields):
+        if field.name and "Tentative" in field.name:
+            embed.remove_field(i)
+            break
+    return embed
+
 class AttendanceView(discord.ui.View):
     def __init__(self, event_id: int = None):
         super().__init__(timeout=None)
@@ -58,7 +66,6 @@ class AttendanceView(discord.ui.View):
 
         attending_dict = {}
         absent_players = []
-        tentative_players = []
         total_attending = 0
 
         for signup in all_signups:
@@ -82,8 +89,6 @@ class AttendanceView(discord.ui.View):
                 total_attending += 1
             elif signup.status == "absent":
                 absent_players.append(entry)
-            elif signup.status == "tentative":
-                tentative_players.append(entry)
 
         attending_lines = []
         sorted_groups = sorted(attending_dict.keys(), key=lambda x: (x == "Unassigned", x))
@@ -98,12 +103,11 @@ class AttendanceView(discord.ui.View):
             res = "\n".join(player_list).strip() if player_list else default_text
             return res[:1000] + "\n...*(Too many to display)*" if len(res) > 1024 else res
 
-        embed = interaction.message.embeds[0]
+        embed = strip_tentative_field(interaction.message.embeds[0])
         embed.set_field_at(1, name=f"✅ Attending ({total_attending})", value=safe_join(attending_lines), inline=True)
         embed.set_field_at(2, name=f"⛔ Not Attending ({len(absent_players)})", value=safe_join(absent_players), inline=True)
-        embed.set_field_at(3, name=f"⏳ Tentative ({len(tentative_players)})", value=safe_join(tentative_players), inline=True)
-        
-        await interaction.message.edit(embed=embed)
+
+        await interaction.message.edit(embed=embed, view=self)
         display_status = "Not Attending" if status == "absent" else status.capitalize()
         await interaction.followup.send(f"Your RSVP has been recorded as **{display_status}**.", ephemeral=True)
 
@@ -115,14 +119,30 @@ class AttendanceView(discord.ui.View):
     async def absent(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_rsvp(interaction, "absent")
 
+class LegacyTentativeView(discord.ui.View):
+    """Catches the 'Tentative' button on messages posted before that option was removed.
+
+    Not attached to any newly-sent message, but still registered persistently so
+    clicking the stale button on an old message doesn't fail the interaction outright.
+    """
+    def __init__(self):
+        super().__init__(timeout=None)
+
     @discord.ui.button(label="Tentative", emoji="⏳", style=discord.ButtonStyle.blurple, custom_id="btn_tentative")
     async def tentative(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rsvp(interaction, "tentative")
+        await interaction.response.send_message(
+            "⚠️ **Tentative RSVPs are no longer supported.** Please choose Attending or Not Attending instead.",
+            ephemeral=True,
+        )
+        if interaction.message.embeds:
+            embed = strip_tentative_field(interaction.message.embeds[0])
+            await interaction.message.edit(embed=embed, view=AttendanceView())
 
 class AttendanceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.bot.add_view(AttendanceView()) 
+        self.bot.add_view(AttendanceView())
+        self.bot.add_view(LegacyTentativeView())
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AttendanceCog(bot))
