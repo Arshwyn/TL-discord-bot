@@ -9,6 +9,29 @@ from database.db_setup import get_db
 from database.models import GuildEvent, EventAttendance, AttendanceRecord, UserProfile, BotConfig
 from cogs.attendance import AttendanceView
 
+def is_event_manager():
+    """Allows Manage Server admins, or anyone holding the configured Event Manager role."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not isinstance(interaction.user, discord.Member):
+            return False
+        if interaction.user.guild_permissions.manage_guild:
+            return True
+
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="event_manager_role_id").first()
+
+        if not cfg or not cfg.setting_value:
+            return False
+
+        try:
+            role_id = int(cfg.setting_value)
+        except ValueError:
+            return False
+
+        return any(role.id == role_id for role in interaction.user.roles)
+
+    return app_commands.check(predicate)
+
 class SchedulingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -17,7 +40,16 @@ class SchedulingCog(commands.Cog):
 
     def cog_unload(self):
         self.check_events_loop.cancel()
-        self.cleanup_attendance_loop.cancel() 
+        self.cleanup_attendance_loop.cancel()
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CheckFailure):
+            await interaction.response.send_message(
+                "❌ **Permission Denied:** You need the Event Manager role (or Manage Server) to do that.",
+                ephemeral=True
+            )
+            return
+        raise error
 
     tz_choices = [
         app_commands.Choice(name="Eastern Time (EST/EDT)", value="US/Eastern"),
@@ -76,8 +108,46 @@ class SchedulingCog(commands.Cog):
             else:
                 await interaction.response.send_message("ℹ️ No ping roles were configured.", ephemeral=True)
 
-    @app_commands.command(name="create_event", description="Schedule a guild event")
+    @app_commands.command(name="set_event_manager_role", description="Set the role allowed to create/edit/delete/list events")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(role="The role to grant event-management access to")
+    async def set_event_manager_role(self, interaction: discord.Interaction, role: discord.Role):
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="event_manager_role_id").first()
+            if cfg:
+                cfg.setting_value = str(role.id)
+            else:
+                db.add(BotConfig(setting_key="event_manager_role_id", setting_value=str(role.id)))
+            db.commit()
+
+        await interaction.response.send_message(f"✅ {role.mention} can now create, edit, delete, and list events.", ephemeral=True)
+
+    @app_commands.command(name="view_event_manager_role", description="Check which role is currently allowed to manage events")
+    @app_commands.default_permissions(manage_guild=True)
+    async def view_event_manager_role(self, interaction: discord.Interaction):
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="event_manager_role_id").first()
+
+        if not cfg or not cfg.setting_value:
+            await interaction.response.send_message("ℹ️ No Event Manager role is configured. Only members with **Manage Server** can manage events.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(f"🛠️ **Event Manager role:** <@&{cfg.setting_value}> (Manage Server members always have access too.)", ephemeral=True)
+
+    @app_commands.command(name="clear_event_manager_role", description="Remove the configured Event Manager role")
+    @app_commands.default_permissions(manage_guild=True)
+    async def clear_event_manager_role(self, interaction: discord.Interaction):
+        with next(get_db()) as db:
+            cfg = db.query(BotConfig).filter_by(setting_key="event_manager_role_id").first()
+            if cfg:
+                db.delete(cfg)
+                db.commit()
+                await interaction.response.send_message("🗑️ Event Manager role cleared. Only members with **Manage Server** can manage events now.", ephemeral=True)
+            else:
+                await interaction.response.send_message("ℹ️ No Event Manager role was configured.", ephemeral=True)
+
+    @app_commands.command(name="create_event", description="Schedule a guild event")
+    @is_event_manager()
     @app_commands.describe(
         name="Event Name (e.g., Archboss Tevent)",
         game_type="Is this a PvE or PvP event?",
@@ -146,7 +216,7 @@ class SchedulingCog(commands.Cog):
         )
 
     @app_commands.command(name="edit_event", description="Edit an existing event's details")
-    @app_commands.default_permissions(manage_guild=True)
+    @is_event_manager()
     @app_commands.choices(tz_input=tz_choices, game_type=game_choices)
     @app_commands.describe(this_occurrence_only="Set to True to edit ONLY this specific event, leaving future repeats unchanged.")
     async def edit_event(
@@ -228,7 +298,7 @@ class SchedulingCog(commands.Cog):
         await interaction.response.send_message(f"✅ Event `{event_id}` updated.{msg_tail}", ephemeral=True)
 
     @app_commands.command(name="delete_event", description="Cancel and delete an event")
-    @app_commands.default_permissions(manage_guild=True)
+    @is_event_manager()
     async def delete_event(self, interaction: discord.Interaction, event_id: int):
         with next(get_db()) as db:
             event = db.query(GuildEvent).filter_by(id=event_id).first()
@@ -260,7 +330,7 @@ class SchedulingCog(commands.Cog):
         await interaction.response.send_message(f"🗑️ Event `{event_id}` removed.", ephemeral=True)
 
     @app_commands.command(name="list_events", description="View active scheduled events")
-    @app_commands.default_permissions(manage_guild=True)
+    @is_event_manager()
     async def list_events(self, interaction: discord.Interaction):
         with next(get_db()) as db:
             events = db.query(GuildEvent).filter_by(is_completed=False).order_by(GuildEvent.start_time.asc()).all()
