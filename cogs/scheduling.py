@@ -23,7 +23,11 @@ def is_event_manager():
         if not cfg or not cfg.setting_value:
             return False
 
-        role_id = int(cfg.setting_value)
+        try:
+            role_id = int(cfg.setting_value)
+        except ValueError:
+            return False
+
         return any(role.id == role_id for role in interaction.user.roles)
 
     return app_commands.check(predicate)

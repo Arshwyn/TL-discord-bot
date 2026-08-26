@@ -49,12 +49,15 @@ Once Codex joins your server, its slash commands will sync globally. An Admin mu
 
 ## 📜 Command Reference
 
-*Note: Commands marked with **Admin Only** require the user to have the `Manage Server` permission in Discord.*
+*Note: Commands marked with **Admin Only** require the user to have the `Manage Server` permission in Discord. Commands marked with **Event Manager** are also usable by anyone holding the role configured via `/set_event_manager_role`.*
 
 ### ⚙️ Bot Configuration
 | Command | Permission | Description |
 | :--- | :--- | :--- |
 | `/set_ping_roles` | Admin Only | Set up to 3 roles (e.g., @Member, @Raider) that Codex will automatically ping when event reminders trigger. |
+| `/set_event_manager_role <role>` | Admin Only | Grant a role permission to create, edit, delete, and list events without needing `Manage Server`. |
+| `/view_event_manager_role` | Admin Only | Check which role is currently configured as Event Manager. |
+| `/clear_event_manager_role` | Admin Only | Remove the configured Event Manager role, restricting event management back to `Manage Server` only. |
 
 ### 🛡️ Profile & Statics
 | Command / Action | Permission | Description |
@@ -71,10 +74,10 @@ Once Codex joins your server, its slash commands will sync globally. An Admin mu
 | Command / Action | Permission | Description |
 | :--- | :--- | :--- |
 | `RSVP UI Buttons` | Everyone | Click on an active event to log attendance. |
-| `/create_event` | Admin Only | Schedule an event with custom pings, recurrence, and specific VC targeting. |
-| `/edit_event` | Admin Only | Modify an active event. |
-| `/delete_event` | Admin Only | Cancel an event. |
-| `/list_events` | Admin Only | View all upcoming events and their database IDs. |
+| `/create_event` | Event Manager | Schedule an event with custom pings, recurrence, and specific VC targeting. |
+| `/edit_event` | Event Manager | Modify an active event. |
+| `/delete_event` | Event Manager | Cancel an event. |
+| `/list_events` | Event Manager | View all upcoming events and their database IDs. |
 | `/view_roster <id>` | Admin Only | View a detailed RSVP breakdown sorted by static. |
 | `/attendance_summary <id>` | Admin Only | View the VC audit (Present, Ghosted, Unregistered). |
 | `/attendance_leaderboard` | Admin Only | View the 30-day guild attendance leaderboard. |
