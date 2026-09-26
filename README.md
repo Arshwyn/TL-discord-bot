@@ -8,7 +8,7 @@ Codex is a fully-featured, database-backed Discord bot built for managing *Thron
 * **Smart UI Dropdowns (Autocomplete):** When updating or viewing active loadouts, Codex queries the SQLite database in real-time to populate interactive, zero-friction dropdown menus containing exact build names.
 * **Gear Verification Receipt:** Built for competitive environments, profiles support an optional screenshot slot, rendering verified gear score captures directly within rich profile cards.
 * **Event Scheduling & Channel Targeted Auditing:** Create recurring or one-time events with custom warning pings. Codex scans targeted Voice Channels exactly 20 minutes after an event begins, evaluating active raiders against interactive RSVP button logs to generate a 30-day attendance leaderboard.
-* **Weighted Loot Roller:** Post loot drops with images. Players roll Need, Alt/Want, or Greed. The bot auto-rolls the winner using a decaying priority mechanic (100% -> 50% -> 0%) based on recent wins to prevent loot funneling. Loot penalties automatically reset bi-weekly.
+* **Weighted Loot Roller:** Post loot drops with images. Players roll Need, Alt/Want, or Greed. The bot auto-rolls the winner using a decaying priority mechanic (100% -> 50% -> 0%) based on recent wins to prevent loot funneling — Need and Alt/Want each track their own decay independently, while Greed is always a flat, undecayed roll so unwanted loot doesn't sit around uncontested. Need/Alt-Want penalties automatically reset bi-weekly.
 
 ---
 

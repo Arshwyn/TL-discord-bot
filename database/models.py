@@ -18,9 +18,7 @@ class UserProfile(Base):
     gear_score: Mapped[int] = mapped_column(Integer, default=0)
     static_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
     gear_screenshot_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    
-    loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
-    
+
     attendance = relationship(
         "EventAttendance", 
         primaryjoin="UserProfile.discord_id==EventAttendance.discord_id",
@@ -100,14 +98,26 @@ class LootItem(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     winner_penalized: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which pool the winner was drawn from ("need" / "alt_want" / "greed"), so a later
+    # reroll/re-open refund knows which decay counter to credit back.
+    winner_roll_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 class LootRoll(Base):
     __tablename__ = "loot_rolls"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     loot_item_id: Mapped[int] = mapped_column(ForeignKey("loot_items.id", ondelete="CASCADE"))
     discord_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    roll_type: Mapped[str] = mapped_column(String(20), nullable=False) 
+    roll_type: Mapped[str] = mapped_column(String(20), nullable=False)
     item = relationship("LootItem", back_populates="rolls")
+
+class LootPriority(Base):
+    """Per-Discord-user loot decay counters. Deliberately its own table keyed only by discord_id —
+    UserProfile is keyed by (discord_id, build_name), and a member can have several builds, so
+    storing decay there would scatter one person's counter across arbitrary build rows."""
+    __tablename__ = "loot_priority"
+    discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    need_wins: Mapped[int] = mapped_column(Integer, default=0)
+    alt_want_wins: Mapped[int] = mapped_column(Integer, default=0)
 
 class BotConfig(Base):
     __tablename__ = "bot_config"
