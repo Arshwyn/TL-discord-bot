@@ -19,7 +19,10 @@ class UserProfile(Base):
     static_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
     gear_screenshot_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     
-    loot_wins: Mapped[int] = mapped_column(Integer, default=0) 
+    # Separate decay counters: Need and Alt/Want each dock their own priority. Greed never decays,
+    # so it has no counter here.
+    need_wins: Mapped[int] = mapped_column(Integer, default=0)
+    alt_want_wins: Mapped[int] = mapped_column(Integer, default=0)
     
     attendance = relationship(
         "EventAttendance", 
@@ -100,6 +103,9 @@ class LootItem(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     winner_penalized: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which pool the winner was drawn from ("need" / "alt_want" / "greed"), so a later
+    # reroll/re-open refund knows which decay counter to credit back.
+    winner_roll_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 class LootRoll(Base):
     __tablename__ = "loot_rolls"

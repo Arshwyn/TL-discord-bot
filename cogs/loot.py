@@ -12,6 +12,73 @@ from database.models import LootItem, LootRoll, UserProfile, BotConfig
 ROLL_LABELS = {"need": "Need", "alt_want": "Alt / Want", "greed": "Greed"}
 EPHEMERAL_TOAST_DELAY = 5.0
 
+# Need and Alt/Want each decay their own priority on a win. Greed has no entry here — it's always a
+# flat, unweighted roll and never docks anyone's priority, so loot nobody needs stops piling up unclaimed.
+PENALTY_FIELDS = {"need": "need_wins", "alt_want": "alt_want_wins"}
+
+
+def pick_weighted_winner(db, candidates, field_name):
+    """Pick from candidates, weighted by their decaying priority (100% -> 50% -> 0%) on field_name."""
+    if len(candidates) == 1:
+        return candidates[0]
+
+    weights = []
+    for uid in candidates:
+        prof = db.query(UserProfile).filter_by(discord_id=uid).first()
+        wins = getattr(prof, field_name, 0) if prof else 0
+
+        if wins == 0: weights.append(1.0)
+        elif wins == 1: weights.append(0.5)
+        else: weights.append(0.0)
+
+    if sum(weights) == 0:
+        weights = [1.0] * len(candidates)
+
+    return random.choices(candidates, weights=weights, k=1)[0]
+
+
+def resolve_loot_winner(db, rolls_dict):
+    """Waterfall Need -> Alt/Want -> Greed. Need/Alt-Want draw weighted by their own decay counter;
+    Greed is always a flat, unweighted pick and never penalizes the winner.
+    Returns (winner_id, roll_type_key, display_category, winner_penalized)."""
+    if rolls_dict["need"]:
+        return pick_weighted_winner(db, rolls_dict["need"], "need_wins"), "need", "Need 🟢", True
+    if rolls_dict["alt_want"]:
+        return pick_weighted_winner(db, rolls_dict["alt_want"], "alt_want_wins"), "alt_want", "Alt / Want 🔵", True
+    if rolls_dict["greed"]:
+        return random.choice(rolls_dict["greed"]), "greed", "Greed 🟡", False
+    return None, "", "", False
+
+
+def apply_winner_penalty(db, winner_id, roll_type_key):
+    """Bump the decay counter matching roll_type_key. No-op for Greed (not in PENALTY_FIELDS)."""
+    field = PENALTY_FIELDS.get(roll_type_key)
+    if not field:
+        return
+
+    prof = db.query(UserProfile).filter_by(discord_id=winner_id).first()
+    if prof:
+        setattr(prof, field, getattr(prof, field, 0) + 1)
+    else:
+        db.add(UserProfile(
+            discord_id=winner_id, build_name="Default Build", build_type="PvE",
+            ingame_name=f"User {winner_id}", **{field: 1}
+        ))
+
+
+def refund_winner_penalty(db, item: "LootItem"):
+    """Undo whatever apply_winner_penalty did for this item's current winner, if anything."""
+    if not (item.winner_penalized and item.winner_id and item.winner_roll_type):
+        return
+
+    field = PENALTY_FIELDS.get(item.winner_roll_type)
+    if not field:
+        return
+
+    prof = db.query(UserProfile).filter_by(discord_id=item.winner_id).first()
+    if prof and getattr(prof, field, 0) > 0:
+        setattr(prof, field, getattr(prof, field) - 1)
+
 
 def auto_dismiss(message: discord.Message, delay: float = EPHEMERAL_TOAST_DELAY):
     """Fire-and-forget delete of a short-lived ephemeral confirmation toast."""
@@ -342,63 +409,19 @@ class PersistentLootView(discord.ui.View):
                 if r.roll_type in rolls_dict:
                     rolls_dict[r.roll_type].append(r.discord_id)
 
-            winner_id = None
-            winning_category = ""
-            winner_penalized = False
-
-            # WEIGHTED PROBABILITY ENGINE
-            def pick_weighted_winner(candidates):
-                if len(candidates) == 1:
-                    return candidates[0]
-
-                weights = []
-                for uid in candidates:
-                    prof = db.query(UserProfile).filter_by(discord_id=uid).first()
-                    wins = prof.loot_wins if prof else 0
-
-                    if wins == 0: weights.append(1.0)
-                    elif wins == 1: weights.append(0.5)
-                    else: weights.append(0.0)
-
-                if sum(weights) == 0:
-                    weights = [1.0] * len(candidates)
-
-                return random.choices(candidates, weights=weights, k=1)[0]
-
-            # WATERFALL SELECTION
-            if rolls_dict["need"]:
-                winner_id = pick_weighted_winner(rolls_dict["need"])
-                winning_category = "Need 🟢"
-                winner_penalized = True
-            elif rolls_dict["alt_want"]:
-                winner_id = pick_weighted_winner(rolls_dict["alt_want"])
-                winning_category = "Alt / Want 🔵"
-                winner_penalized = True
-            elif rolls_dict["greed"]:
-                winner_id = pick_weighted_winner(rolls_dict["greed"])
-                winning_category = "Greed 🟡"
-                # An uncontested greed roll (nobody else claimed need/alt-want/greed) isn't a real
-                # contest, so the sole roller shouldn't have their priority docked for taking it.
-                winner_penalized = len(rolls_dict["greed"]) > 1
+            winner_id, roll_type_key, winning_category, winner_penalized = resolve_loot_winner(db, rolls_dict)
 
             saved_item_id = item.id
             saved_item_name = item.item_name
             saved_thread_id = item.thread_id
             item.is_closed = True
             item.winner_id = winner_id
+            item.winner_roll_type = roll_type_key or None
             item.winner_penalized = winner_penalized
             item.closed_at = now_utc
 
             if winner_id and winner_penalized:
-                prof = db.query(UserProfile).filter_by(discord_id=winner_id).first()
-                if prof:
-                    prof.loot_wins += 1
-                else:
-                    new_prof = UserProfile(
-                        discord_id=winner_id, build_name="Default Build", build_type="PvE",
-                        ingame_name=f"User {winner_id}", loot_wins=1
-                    )
-                    db.add(new_prof)
+                apply_winner_penalty(db, winner_id, roll_type_key)
             db.commit()
 
         # Update the main card directly — we're already editing it
@@ -563,10 +586,7 @@ class ManageThreadView(discord.ui.View):
             # 1. REROLL REFUND SEQUENCE
             if item.winner_id:
                 # Only refund a penalty that was actually applied to the previous winner
-                if item.winner_penalized:
-                    old_winner = db.query(UserProfile).filter_by(discord_id=item.winner_id).first()
-                    if old_winner and old_winner.loot_wins > 0:
-                        old_winner.loot_wins -= 1
+                refund_winner_penalty(db, item)
 
                 # Delete the old winner from the item's roll list completely so they don't win the reroll
                 old_roll = db.query(LootRoll).filter_by(loot_item_id=item.id, discord_id=item.winner_id).first()
@@ -582,63 +602,20 @@ class ManageThreadView(discord.ui.View):
                 if r.roll_type in rolls_dict:
                     rolls_dict[r.roll_type].append(r.discord_id)
 
-            winner_id = None
-            winning_category = ""
-            winner_penalized = False
-
-            # 3. WEIGHTED PROBABILITY ENGINE
-            def pick_weighted_winner(candidates):
-                if len(candidates) == 1:
-                    return candidates[0]
-
-                weights = []
-                for uid in candidates:
-                    prof = db.query(UserProfile).filter_by(discord_id=uid).first()
-                    wins = prof.loot_wins if prof else 0
-
-                    if wins == 0: weights.append(1.0)
-                    elif wins == 1: weights.append(0.5)
-                    else: weights.append(0.0)
-
-                if sum(weights) == 0:
-                    weights = [1.0] * len(candidates)
-
-                return random.choices(candidates, weights=weights, k=1)[0]
-
-            # 4. WATERFALL SELECTION
-            if rolls_dict["need"]:
-                winner_id = pick_weighted_winner(rolls_dict["need"])
-                winning_category = "Need 🟢"
-                winner_penalized = True
-            elif rolls_dict["alt_want"]:
-                winner_id = pick_weighted_winner(rolls_dict["alt_want"])
-                winning_category = "Alt / Want 🔵"
-                winner_penalized = True
-            elif rolls_dict["greed"]:
-                winner_id = pick_weighted_winner(rolls_dict["greed"])
-                winning_category = "Greed 🟡"
-                # An uncontested greed roll (nobody else claimed need/alt-want/greed) isn't a real
-                # contest, so the sole roller shouldn't have their priority docked for taking it.
-                winner_penalized = len(rolls_dict["greed"]) > 1
+            # 3. WEIGHTED PROBABILITY ENGINE + 4. WATERFALL SELECTION
+            winner_id, roll_type_key, winning_category, winner_penalized = resolve_loot_winner(db, rolls_dict)
 
             # 5. LOCK ITEM AND PENALIZE NEW WINNER
             saved_item_id = item.id
             saved_item_name = item.item_name
             item.is_closed = True
             item.winner_id = winner_id
+            item.winner_roll_type = roll_type_key or None
             item.winner_penalized = winner_penalized
             item.closed_at = now_utc
 
             if winner_id and winner_penalized:
-                prof = db.query(UserProfile).filter_by(discord_id=winner_id).first()
-                if prof:
-                    prof.loot_wins += 1
-                else:
-                    new_prof = UserProfile(
-                        discord_id=winner_id, build_name="Default Build", build_type="PvE",
-                        ingame_name=f"User {winner_id}", loot_wins=1
-                    )
-                    db.add(new_prof)
+                apply_winner_penalty(db, winner_id, roll_type_key)
             db.commit()
 
         # 6. UPDATE THE PANEL (stays closed-state: Reassign disabled, Reroll/Re-Open enabled)
@@ -681,10 +658,7 @@ class ManageThreadView(discord.ui.View):
 
             # Refund the previous winner's penalty if one was actually applied. Every existing roll
             # entry, including the old winner's, is left untouched so nobody has to re-click.
-            if item.winner_penalized and item.winner_id:
-                old_winner = db.query(UserProfile).filter_by(discord_id=item.winner_id).first()
-                if old_winner and old_winner.loot_wins > 0:
-                    old_winner.loot_wins -= 1
+            refund_winner_penalty(db, item)
 
             saved_item_id = item.id
             saved_item_name = item.item_name
@@ -693,6 +667,7 @@ class ManageThreadView(discord.ui.View):
 
             item.is_closed = False
             item.winner_id = None
+            item.winner_roll_type = None
             item.winner_penalized = False
             item.closed_at = None
             item.is_archived = False
@@ -784,21 +759,32 @@ class LootCog(commands.Cog):
         target = member or interaction.user
         with next(get_db()) as db:
             prof = db.query(UserProfile).filter_by(discord_id=target.id).first()
-            wins = prof.loot_wins if prof else 0
+            need_wins = prof.need_wins if prof else 0
+            alt_want_wins = prof.alt_want_wins if prof else 0
 
-        weight = 100 if wins == 0 else (50 if wins == 1 else 0)
-        await interaction.response.send_message(f"👤 {target.mention} has won **{wins}** items recently.\n🎲 Current roll weight: **{weight}%**", ephemeral=True)
+        def weight_for(wins):
+            return 100 if wins == 0 else (50 if wins == 1 else 0)
 
-    @loot_group.command(name="priority_reset", description="Reset loot penalties to 100% (Provide no member to reset the whole guild)")
+        await interaction.response.send_message(
+            f"👤 {target.mention}'s current roll weights:\n"
+            f"🟢 Need: **{weight_for(need_wins)}%** ({need_wins} recent win{'s' if need_wins != 1 else ''})\n"
+            f"🔵 Alt / Want: **{weight_for(alt_want_wins)}%** ({alt_want_wins} recent win{'s' if alt_want_wins != 1 else ''})\n"
+            f"🟡 Greed: **100%** *(no decay)*",
+            ephemeral=True
+        )
+
+    @loot_group.command(name="priority_reset", description="Reset Need/Alt-Want loot penalties to 100% (Provide no member to reset the whole guild)")
     @app_commands.default_permissions(manage_guild=True)
     async def priority_reset(self, interaction: discord.Interaction, member: discord.Member = None):
         with next(get_db()) as db:
             if member:
                 prof = db.query(UserProfile).filter_by(discord_id=member.id).first()
-                if prof: prof.loot_wins = 0
-                msg = f"✅ Reset loot priority for {member.mention} back to 100%."
+                if prof:
+                    prof.need_wins = 0
+                    prof.alt_want_wins = 0
+                msg = f"✅ Reset Need/Alt-Want loot priority for {member.mention} back to 100%."
             else:
-                db.query(UserProfile).update({UserProfile.loot_wins: 0})
+                db.query(UserProfile).update({UserProfile.need_wins: 0, UserProfile.alt_want_wins: 0})
                 now_unix = int(datetime.now(timezone.utc).timestamp())
                 fourteen_days = 14 * 24 * 60 * 60
                 cfg = db.query(BotConfig).filter_by(setting_key="next_loot_reset").first()
@@ -806,7 +792,7 @@ class LootCog(commands.Cog):
                     cfg.setting_value = str(now_unix + fourteen_days)
                 else:
                     db.add(BotConfig(setting_key="next_loot_reset", setting_value=str(now_unix + fourteen_days)))
-                msg = "✅ Reset loot priority for **ALL guild members** back to 100%.\n*(The 14-day automatic reset timer has been aligned to start from right now.)*"
+                msg = "✅ Reset Need/Alt-Want loot priority for **ALL guild members** back to 100%.\n*(The 14-day automatic reset timer has been aligned to start from right now.)*"
             db.commit()
         await interaction.response.send_message(msg, ephemeral=True)
 
@@ -884,7 +870,7 @@ class LootCog(commands.Cog):
 
             target_time = int(cfg.setting_value)
             if now_unix >= target_time:
-                db.query(UserProfile).update({UserProfile.loot_wins: 0})
+                db.query(UserProfile).update({UserProfile.need_wins: 0, UserProfile.alt_want_wins: 0})
                 cfg.setting_value = str(now_unix + fourteen_days)
                 db.commit()
                 print("🔄 Automated Bi-Weekly Loot Priority Reset executed successfully.")
