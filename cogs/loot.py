@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import func
 
 from database.db_setup import get_db
-from database.models import LootItem, LootRoll, UserProfile, BotConfig
+from database.models import LootItem, LootRoll, UserProfile, BotConfig, LootPriority
 
 ROLL_LABELS = {"need": "Need", "alt_want": "Alt / Want", "greed": "Greed"}
 EPHEMERAL_TOAST_DELAY = 5.0
@@ -24,7 +24,7 @@ def pick_weighted_winner(db, candidates, field_name):
 
     weights = []
     for uid in candidates:
-        prof = db.query(UserProfile).filter_by(discord_id=uid).first()
+        prof = db.query(LootPriority).filter_by(discord_id=uid).first()
         wins = getattr(prof, field_name, 0) if prof else 0
 
         if wins == 0: weights.append(1.0)
@@ -56,14 +56,11 @@ def apply_winner_penalty(db, winner_id, roll_type_key):
     if not field:
         return
 
-    prof = db.query(UserProfile).filter_by(discord_id=winner_id).first()
-    if prof:
-        setattr(prof, field, getattr(prof, field, 0) + 1)
-    else:
-        db.add(UserProfile(
-            discord_id=winner_id, build_name="Default Build", build_type="PvE",
-            ingame_name=f"User {winner_id}", **{field: 1}
-        ))
+    prof = db.query(LootPriority).filter_by(discord_id=winner_id).first()
+    if not prof:
+        prof = LootPriority(discord_id=winner_id, need_wins=0, alt_want_wins=0)
+        db.add(prof)
+    setattr(prof, field, getattr(prof, field) + 1)
 
 
 def refund_winner_penalty(db, item: "LootItem"):
@@ -75,7 +72,7 @@ def refund_winner_penalty(db, item: "LootItem"):
     if not field:
         return
 
-    prof = db.query(UserProfile).filter_by(discord_id=item.winner_id).first()
+    prof = db.query(LootPriority).filter_by(discord_id=item.winner_id).first()
     if prof and getattr(prof, field, 0) > 0:
         setattr(prof, field, getattr(prof, field) - 1)
 
@@ -758,7 +755,7 @@ class LootCog(commands.Cog):
     async def priority_check(self, interaction: discord.Interaction, member: discord.Member = None):
         target = member or interaction.user
         with next(get_db()) as db:
-            prof = db.query(UserProfile).filter_by(discord_id=target.id).first()
+            prof = db.query(LootPriority).filter_by(discord_id=target.id).first()
             need_wins = prof.need_wins if prof else 0
             alt_want_wins = prof.alt_want_wins if prof else 0
 
@@ -778,13 +775,13 @@ class LootCog(commands.Cog):
     async def priority_reset(self, interaction: discord.Interaction, member: discord.Member = None):
         with next(get_db()) as db:
             if member:
-                prof = db.query(UserProfile).filter_by(discord_id=member.id).first()
+                prof = db.query(LootPriority).filter_by(discord_id=member.id).first()
                 if prof:
                     prof.need_wins = 0
                     prof.alt_want_wins = 0
                 msg = f"✅ Reset Need/Alt-Want loot priority for {member.mention} back to 100%."
             else:
-                db.query(UserProfile).update({UserProfile.need_wins: 0, UserProfile.alt_want_wins: 0})
+                db.query(LootPriority).update({LootPriority.need_wins: 0, LootPriority.alt_want_wins: 0})
                 now_unix = int(datetime.now(timezone.utc).timestamp())
                 fourteen_days = 14 * 24 * 60 * 60
                 cfg = db.query(BotConfig).filter_by(setting_key="next_loot_reset").first()
@@ -870,7 +867,7 @@ class LootCog(commands.Cog):
 
             target_time = int(cfg.setting_value)
             if now_unix >= target_time:
-                db.query(UserProfile).update({UserProfile.need_wins: 0, UserProfile.alt_want_wins: 0})
+                db.query(LootPriority).update({LootPriority.need_wins: 0, LootPriority.alt_want_wins: 0})
                 cfg.setting_value = str(now_unix + fourteen_days)
                 db.commit()
                 print("🔄 Automated Bi-Weekly Loot Priority Reset executed successfully.")
