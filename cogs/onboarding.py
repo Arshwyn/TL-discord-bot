@@ -35,8 +35,14 @@ class GSModal(discord.ui.Modal, title="Final Step: Gear Score"):
 
         with next(get_db()) as db:
             all_profiles = db.query(UserProfile).filter_by(discord_id=interaction.user.id).all()
-            profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name="Main Build").first()
-            
+            # If the user has exactly one build, treat it as the onboarding target even if it
+            # was renamed away from "Main Build" (via /profile update); otherwise fall back to
+            # the default name to avoid guessing which of several builds this flow should touch.
+            if len(all_profiles) == 1:
+                profile = all_profiles[0]
+            else:
+                profile = next((p for p in all_profiles if p.build_name == "Main Build"), None)
+
             static_group = all_profiles[0].static_group if all_profiles else None
 
             if profile:

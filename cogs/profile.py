@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from sqlalchemy.exc import IntegrityError
 from database.db_setup import get_db
 from database.models import UserProfile, EventAttendance
 
@@ -52,6 +53,24 @@ class ProfileCog(commands.Cog):
                 app_commands.Choice(name=p.build_name, value=p.build_name)
                 for p in profiles if current.lower() in p.build_name.lower()
             ][:25]
+
+    @staticmethod
+    def _rename_build(db, discord_id: int, profile: UserProfile, new_build_name: str, conflict_prefix: str) -> str | None:
+        """Renames `profile` to new_build_name in place. Returns an error message to show the
+        user if the name is blank or already taken by one of their other builds; returns None
+        (mutating profile.build_name) on success, including the no-op case where the trimmed
+        name matches the current one.
+        """
+        trimmed = new_build_name.strip()
+        if not trimmed:
+            return "❌ Build name cannot be blank."
+        if trimmed == profile.build_name:
+            return None
+        conflict = db.query(UserProfile).filter_by(discord_id=discord_id, build_name=trimmed).first()
+        if conflict:
+            return f"❌ {conflict_prefix} a build named **{trimmed}**. Choose a different name."
+        profile.build_name = trimmed
+        return None
 
     @profile_group.command(name="setup", description="Create a new specific build loadout")
     @app_commands.describe(
@@ -152,13 +171,14 @@ class ProfileCog(commands.Cog):
                     await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
                     return
 
-                if new_build_name is not None and new_build_name != build_name:
-                    conflict = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=new_build_name).first()
-                    if conflict:
-                        await interaction.response.send_message(f"❌ You already have a build named **{new_build_name}**. Choose a different name.", ephemeral=True)
+                if new_build_name is not None:
+                    original_name = profile.build_name
+                    error = self._rename_build(db, interaction.user.id, profile, new_build_name, "You already have")
+                    if error:
+                        await interaction.response.send_message(error, ephemeral=True)
                         return
-                    profile.build_name = new_build_name
-                    changes.append(f"🏷️ **Build Name:** Renamed to `{new_build_name}`")
+                    if profile.build_name != original_name:
+                        changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
 
                 if gear_score is not None:
                     profile.gear_score = gear_score
@@ -179,10 +199,15 @@ class ProfileCog(commands.Cog):
             if not changes:
                 await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
                 return
-                
-            db.commit()
 
-        target_name = f"Build '{new_build_name or build_name}'" if build_name else "Global Profile"
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                await interaction.response.send_message("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
+                return
+
+        target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.response.send_message(
             f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
@@ -236,13 +261,14 @@ class ProfileCog(commands.Cog):
                     await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}** for {member.mention}.", ephemeral=True)
                     return
 
-                if new_build_name is not None and new_build_name != build_name:
-                    conflict = db.query(UserProfile).filter_by(discord_id=member.id, build_name=new_build_name).first()
-                    if conflict:
-                        await interaction.response.send_message(f"❌ {member.mention} already has a build named **{new_build_name}**. Choose a different name.", ephemeral=True)
+                if new_build_name is not None:
+                    original_name = profile.build_name
+                    error = self._rename_build(db, member.id, profile, new_build_name, f"{member.mention} already has")
+                    if error:
+                        await interaction.response.send_message(error, ephemeral=True)
                         return
-                    profile.build_name = new_build_name
-                    changes.append(f"🏷️ **Build Name:** Renamed to `{new_build_name}`")
+                    if profile.build_name != original_name:
+                        changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
 
                 if gear_score is not None:
                     profile.gear_score = gear_score
@@ -261,9 +287,14 @@ class ProfileCog(commands.Cog):
                 await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
                 return
 
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                await interaction.response.send_message("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
+                return
 
-        target_name = f"Build '{new_build_name or build_name}'" if build_name else "Global Profile"
+        target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.response.send_message(
             f"✅ **{target_name} for {member.mention} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
