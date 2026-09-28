@@ -175,15 +175,20 @@ class ProfileCog(commands.Cog):
                 if not profile:
                     await interaction.followup.send(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
                     return
+                # Captured now (not read back after commit/close below) since commit() expires
+                # ORM attributes by default, and the session is closed by the time we build the
+                # confirmation message — reading profile.build_name at that point would raise
+                # DetachedInstanceError instead of just returning the old value.
+                final_build_name = profile.build_name
 
                 if new_build_name is not None:
-                    original_name = profile.build_name
                     error = self._rename_build(db, interaction.user.id, profile, new_build_name, "You already have")
                     if error:
                         await interaction.followup.send(error, ephemeral=True)
                         return
-                    if profile.build_name != original_name:
+                    if profile.build_name != final_build_name:
                         changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
+                        final_build_name = profile.build_name
 
                 if gear_score is not None:
                     profile.gear_score = gear_score
@@ -212,7 +217,7 @@ class ProfileCog(commands.Cog):
                 await interaction.followup.send("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
                 return
 
-        target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
+        target_name = f"Build '{final_build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.followup.send(
             f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
@@ -270,15 +275,20 @@ class ProfileCog(commands.Cog):
                 if not profile:
                     await interaction.followup.send(f"⚠️ Could not find a build named **{build_name}** for {member.mention}.", ephemeral=True)
                     return
+                # Captured now (not read back after commit/close below) since commit() expires
+                # ORM attributes by default, and the session is closed by the time we build the
+                # confirmation message — reading profile.build_name at that point would raise
+                # DetachedInstanceError instead of just returning the old value.
+                final_build_name = profile.build_name
 
                 if new_build_name is not None:
-                    original_name = profile.build_name
                     error = self._rename_build(db, member.id, profile, new_build_name, f"{member.mention} already has")
                     if error:
                         await interaction.followup.send(error, ephemeral=True)
                         return
-                    if profile.build_name != original_name:
+                    if profile.build_name != final_build_name:
                         changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
+                        final_build_name = profile.build_name
 
                 if gear_score is not None:
                     profile.gear_score = gear_score
@@ -304,7 +314,7 @@ class ProfileCog(commands.Cog):
                 await interaction.followup.send("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
                 return
 
-        target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
+        target_name = f"Build '{final_build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.followup.send(
             f"✅ **{target_name} for {member.mention} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
