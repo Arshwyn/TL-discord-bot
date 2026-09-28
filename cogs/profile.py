@@ -114,20 +114,22 @@ class ProfileCog(commands.Cog):
         primary_weapon="Change your main weapon selection",
         secondary_weapon="Change your off-hand weapon selection",
         build_type="Change the tag (PvE/PvP/PvX) for this build",
-        screenshot="Upload a new screenshot to verify your gear modifications"
+        screenshot="Upload a new screenshot to verify your gear modifications",
+        new_build_name="Rename this build (e.g., 'Main Build' -> 'GvG Tank')"
     )
     @app_commands.choices(primary_weapon=WEAPON_CHOICES, secondary_weapon=WEAPON_CHOICES, build_type=BUILD_CHOICES)
     async def update(
-        self, interaction: discord.Interaction, 
+        self, interaction: discord.Interaction,
         build_name: str = None, # Made optional
         gear_score: int = None, ingame_name: str = None,
         primary_weapon: str = None, secondary_weapon: str = None,
-        build_type: str = None, screenshot: discord.Attachment = None
+        build_type: str = None, screenshot: discord.Attachment = None,
+        new_build_name: str = None
     ):
         # 1. Enforce build_name requirement for build-specific changes
-        build_specific_changes = [gear_score, primary_weapon, secondary_weapon, build_type, screenshot]
+        build_specific_changes = [gear_score, primary_weapon, secondary_weapon, build_type, screenshot, new_build_name]
         if not build_name and any(x is not None for x in build_specific_changes):
-            await interaction.response.send_message("❌ You must specify a **build_name** if you want to update your gear score, weapons, or build type.", ephemeral=True)
+            await interaction.response.send_message("❌ You must specify a **build_name** if you want to update your gear score, weapons, build type, or rename a build.", ephemeral=True)
             return
 
         with next(get_db()) as db:
@@ -149,6 +151,14 @@ class ProfileCog(commands.Cog):
                 if not profile:
                     await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
                     return
+
+                if new_build_name is not None and new_build_name != build_name:
+                    conflict = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=new_build_name).first()
+                    if conflict:
+                        await interaction.response.send_message(f"❌ You already have a build named **{new_build_name}**. Choose a different name.", ephemeral=True)
+                        return
+                    profile.build_name = new_build_name
+                    changes.append(f"🏷️ **Build Name:** Renamed to `{new_build_name}`")
 
                 if gear_score is not None:
                     profile.gear_score = gear_score
@@ -172,10 +182,10 @@ class ProfileCog(commands.Cog):
                 
             db.commit()
 
-        target_name = f"Build '{build_name}'" if build_name else "Global Profile"
+        target_name = f"Build '{new_build_name or build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
         await interaction.response.send_message(
-            f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}", 
+            f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
             ephemeral=True
         )
 
