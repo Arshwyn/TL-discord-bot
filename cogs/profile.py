@@ -151,14 +151,19 @@ class ProfileCog(commands.Cog):
             await interaction.response.send_message("❌ You must specify a **build_name** if you want to update your gear score, weapons, build type, or rename a build.", ephemeral=True)
             return
 
+        # Defer immediately: the DB work below can occasionally push past Discord's 3-second
+        # ack window, which otherwise shows "the application did not respond" even though the
+        # change goes through. Every reply past this point must use the followup, not response.
+        await interaction.response.defer(ephemeral=True)
+
         with next(get_db()) as db:
             changes = []
-            
+
             # 2. Handle Global IGN Change (doesn't need a specific build)
             if ingame_name is not None:
                 all_builds = db.query(UserProfile).filter_by(discord_id=interaction.user.id).all()
                 if not all_builds:
-                    await interaction.response.send_message("⚠️ You don't have any profiles to update.", ephemeral=True)
+                    await interaction.followup.send("⚠️ You don't have any profiles to update.", ephemeral=True)
                     return
                 for b in all_builds:
                     b.ingame_name = ingame_name
@@ -168,14 +173,14 @@ class ProfileCog(commands.Cog):
             if build_name is not None:
                 profile = db.query(UserProfile).filter_by(discord_id=interaction.user.id, build_name=build_name).first()
                 if not profile:
-                    await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
+                    await interaction.followup.send(f"⚠️ Could not find a build named **{build_name}**. Use `/profile view` to see your exact build names.", ephemeral=True)
                     return
 
                 if new_build_name is not None:
                     original_name = profile.build_name
                     error = self._rename_build(db, interaction.user.id, profile, new_build_name, "You already have")
                     if error:
-                        await interaction.response.send_message(error, ephemeral=True)
+                        await interaction.followup.send(error, ephemeral=True)
                         return
                     if profile.build_name != original_name:
                         changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
@@ -197,19 +202,19 @@ class ProfileCog(commands.Cog):
                     changes.append("📸 **Verification Screenshot:** Updated image track.")
 
             if not changes:
-                await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
+                await interaction.followup.send("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
                 return
 
             try:
                 db.commit()
             except IntegrityError:
                 db.rollback()
-                await interaction.response.send_message("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
+                await interaction.followup.send("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
                 return
 
         target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ **{target_name} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
             ephemeral=True
         )
@@ -241,14 +246,19 @@ class ProfileCog(commands.Cog):
             await interaction.response.send_message("❌ You must specify a **build_name** to update gear score, weapons, build type, or rename a build for this user.", ephemeral=True)
             return
 
+        # Defer immediately: the DB work below can occasionally push past Discord's 3-second
+        # ack window, which otherwise shows "the application did not respond" even though the
+        # change goes through. Every reply past this point must use the followup, not response.
+        await interaction.response.defer(ephemeral=True)
+
         with next(get_db()) as db:
             changes = []
-            
+
             # 2. Handle Global IGN Change
             if ingame_name is not None:
                 all_builds = db.query(UserProfile).filter_by(discord_id=member.id).all()
                 if not all_builds:
-                    await interaction.response.send_message(f"⚠️ {member.mention} doesn't have any profiles to update.", ephemeral=True)
+                    await interaction.followup.send(f"⚠️ {member.mention} doesn't have any profiles to update.", ephemeral=True)
                     return
                 for b in all_builds:
                     b.ingame_name = ingame_name
@@ -258,14 +268,14 @@ class ProfileCog(commands.Cog):
             if build_name is not None:
                 profile = db.query(UserProfile).filter_by(discord_id=member.id, build_name=build_name).first()
                 if not profile:
-                    await interaction.response.send_message(f"⚠️ Could not find a build named **{build_name}** for {member.mention}.", ephemeral=True)
+                    await interaction.followup.send(f"⚠️ Could not find a build named **{build_name}** for {member.mention}.", ephemeral=True)
                     return
 
                 if new_build_name is not None:
                     original_name = profile.build_name
                     error = self._rename_build(db, member.id, profile, new_build_name, f"{member.mention} already has")
                     if error:
-                        await interaction.response.send_message(error, ephemeral=True)
+                        await interaction.followup.send(error, ephemeral=True)
                         return
                     if profile.build_name != original_name:
                         changes.append(f"🏷️ **Build Name:** Renamed to `{profile.build_name}`")
@@ -284,19 +294,19 @@ class ProfileCog(commands.Cog):
                     changes.append(f"🏷️ **Build Tag:** Changed to {build_type}")
 
             if not changes:
-                await interaction.response.send_message("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
+                await interaction.followup.send("ℹ️ No parameters were provided. Profile left unchanged.", ephemeral=True)
                 return
 
             try:
                 db.commit()
             except IntegrityError:
                 db.rollback()
-                await interaction.response.send_message("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
+                await interaction.followup.send("❌ That change conflicts with an existing build. Please try again.", ephemeral=True)
                 return
 
         target_name = f"Build '{profile.build_name}'" if build_name else "Global Profile"
         changes_msg = "\n".join(changes)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ **{target_name} for {member.mention} Updated Successfully!**\n\n**Applied Modifications:**\n{changes_msg}",
             ephemeral=True
         )
