@@ -3,6 +3,7 @@ version: '3.8'
 services:
   tl_bot:
     build: .
+    image: tl-discord-bot:${IMAGE_TAG:-latest}
     container_name: tl_discord_bot
     restart: unless-stopped
     # Reads DISCORD_BOT_TOKEN from the host environment or a .env file in the compose directory
