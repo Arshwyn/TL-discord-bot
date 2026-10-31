@@ -63,6 +63,11 @@ docker compose up -d --build
 ```
 `docker-compose.yml` mounts the local `./data` folder into the container, so the database survives restarts and rebuilds. Only `DISCORD_BOT_TOKEN` is passed through to the container by the compose file; if you want `DATABASE_URL` to apply in Docker, add it to the `environment:` list and keep it pointing inside the mounted `/app/data` folder.
 
+The built image is named `tl-discord-bot:${IMAGE_TAG}`. `IMAGE_TAG` is optional (set it in your shell or `.env`) and defaults to `latest`. To tag a build with the current commit:
+```bash
+IMAGE_TAG=<short-commit-sha> docker compose build
+```
+
 The Docker image is built on `python:3.12.16-slim-trixie` (Python 3.12.16 on Debian 13), pinned to an exact tag for reproducible builds. To bump it, change the `FROM` line in the `Dockerfile` to a newer 3.12.x `slim-trixie` tag and rebuild. The `uv` binary is likewise copied from the pinned `ghcr.io/astral-sh/uv:0.13.6` image; bump the version in the `COPY --from=` line of the `Dockerfile` to update it.
 
 **Without Docker:**
