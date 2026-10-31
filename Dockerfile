@@ -23,5 +23,16 @@ RUN uv sync --frozen --no-install-project --no-cache
 # Copy the rest of the bot's source code
 COPY . .
 
+# Create an unprivileged user; source and venv stay root-owned and read-only to it,
+# only /app/data (the SQLite volume) is owned by the bot user
+RUN groupadd --system --gid 10001 bot \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin bot \
+    && mkdir -p /app/data \
+    && chown 10001:10001 /app/data
+
+ENV PYTHONDONTWRITEBYTECODE=1
+
+USER 10001:10001
+
 # Run the bot using uv's managed environment
 CMD ["uv", "run", "bot.py"]
