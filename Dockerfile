@@ -34,5 +34,5 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 USER 10001:10001
 
-# Run the bot using uv's managed environment
-CMD ["uv", "run", "bot.py"]
+# Run the venv interpreter directly so no uv cache is needed at runtime
+CMD ["/app/.venv/bin/python", "bot.py"]
