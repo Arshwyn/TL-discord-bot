@@ -1,5 +1,5 @@
-# Use a slim Python 3.12 base
-FROM python:3.12-slim
+# Use a slim Python 3.12 base, pinned to an exact patch tag on Debian 13 (trixie)
+FROM python:3.12.16-slim-trixie
 
 # Copy the uv binary directly from the official astral image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
