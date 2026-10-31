@@ -61,6 +61,8 @@ Open `.env` and set:
 ```bash
 docker compose up -d --build
 ```
+The container runs as the non-root user with UID/GID `10001`, with a read-only root filesystem (a `/tmp` tmpfs and the data mount are the only writable paths), all capabilities dropped and `no-new-privileges`. The host `./data` directory must be writable by UID `10001`. For an existing install that previously ran as root, back up `guild_bot.db` and then run `sudo chown -R 10001:10001 ./data`.
+
 `docker-compose.yml` mounts the local `./data` folder into the container, so the database survives restarts and rebuilds. Only `DISCORD_BOT_TOKEN` is passed through to the container by the compose file; if you want `DATABASE_URL` to apply in Docker, add it to the `environment:` list and keep it pointing inside the mounted `/app/data` folder.
 
 The built image is named `tl-discord-bot:${IMAGE_TAG}`. `IMAGE_TAG` is optional (set it in your shell or `.env`) and defaults to `latest`. To tag a build with the current commit:
@@ -79,7 +81,7 @@ uv run bot.py
 ```
 
 ### 5. Data location
-Data is stored in SQLite at `./data/guild_bot.db` (created automatically, and migrated automatically on every start). Set `DATABASE_URL` to use a different SQLite file; the same value is used by the bot and by the Alembic migrations.
+Data is stored in SQLite at `./data/guild_bot.db` (created automatically, and migrated automatically on every start). In Docker the `./data` host directory must be owned by UID `10001` (`sudo chown -R 10001:10001 ./data`). Set `DATABASE_URL` to use a different SQLite file; the same value is used by the bot and by the Alembic migrations.
 
 ### 6. Initial Discord setup
 Slash commands sync globally on startup; the first sync can take up to about an hour to appear in your server. Then an Admin (`Manage Server` permission) should run:
