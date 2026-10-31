@@ -2,7 +2,7 @@
 FROM python:3.12.16-slim-trixie
 
 # Copy the uv binary directly from the official astral image
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /uvx /bin/
 
 # Set working directory
 WORKDIR /app
