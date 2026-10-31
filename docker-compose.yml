@@ -6,6 +6,13 @@ services:
     image: tl-discord-bot:${IMAGE_TAG:-latest}
     container_name: tl_discord_bot
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # Reads DISCORD_BOT_TOKEN from the host environment or a .env file in the compose directory
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
