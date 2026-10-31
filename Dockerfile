@@ -17,7 +17,8 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies (this creates a .venv automatically in /app)
 # --frozen ensures it uses exact versions from uv.lock
 # --no-install-project skips installing the source code itself for this layer
-RUN uv sync --frozen --no-install-project
+# --no-cache keeps the uv cache out of the image layer
+RUN uv sync --frozen --no-install-project --no-cache
 
 # Copy the rest of the bot's source code
 COPY . .
